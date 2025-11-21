@@ -95,6 +95,20 @@ Short-term priorities:
 - `PegGuardKeeper.sol` — Access-controlled sentinel/keeper contract that consumes Pyth prices, evaluates depeg severity, and directly calls into `PegGuardHook` to flip pool modes and JIT windows with configurable cooldowns.
 - `PegGuardJITManager.sol` — Burst-liquidity orchestrator that borrows/pulls capital from funders, mints concentrated liquidity, and streams a slice of profits back into PegGuard reserves before unwinding positions.
 
+## Automation Stack
+
+- `script/03_ConfigurePegGuard.s.sol` wires an existing pool into PegGuard contracts in one broadcast: configure price feeds + fee bands on the hook, keeper thresholds, and JIT tick ranges/reserve splits.
+- `bots/keeper.ts` is a production-ready monitor that pulls fresh Pyth updates from the price service, pushes them on-chain, and triggers `PegGuardKeeper.evaluateAndUpdate` at a configurable cadence.
+- `bots/jit.ts` watches `PegGuardHook` mode transitions and `PegGuardJITManager` state to automatically call `executeBurst` or `settleBurst` when crisis windows open/close.
+
+Install the automation dependencies once:
+
+```bash
+pnpm install # or npm install
+```
+
+Run the bots by exporting the required env vars (RPC URL, private key, pool addresses, price feed IDs, etc.) and executing `pnpm keeper` / `pnpm jit`. Both scripts call real contracts (no mocks) and mirror the orchestration strategy from the CONTEXT repos.
+
 
 ## Hackathon Delivery Roadmap
 
