@@ -2,10 +2,12 @@
 pragma solidity ^0.8.26;
 
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
-import {IPoolManager, SwapParams} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {IPoolManager, SwapParams, ModifyLiquidityParams} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {BaseOverrideFee} from "@openzeppelin/uniswap-hooks/src/fee/BaseOverrideFee.sol";
+import {BaseHook} from "@openzeppelin/uniswap-hooks/src/base/BaseHook.sol";
 import {PythOracleAdapter} from "./oracle/PythOracleAdapter.sol";
 
 contract PegGuardHook is BaseOverrideFee, AccessControl {
@@ -38,6 +40,10 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
         uint24 baseFee;
         uint24 maxFee;
         uint24 minFee;
+        int24 targetTickLower;
+        int24 targetTickUpper;
+        bool targetRangeSet;
+        bool enforceAllowlist;
     }
 
     struct PoolState {
@@ -77,6 +83,9 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
     error MissingPriceFeeds();
     error InvalidAmount();
     error InsufficientReserve();
+    error UnauthorizedLiquidityProvider();
+    error TargetRangeViolation();
+    error InvalidTargetRange();
 
     event PoolConfigured(PoolId indexed poolId, bytes32 feed0, bytes32 feed1, uint24 baseFee);
     event PoolModeUpdated(PoolId indexed poolId, PoolMode mode);
@@ -84,6 +93,11 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
     event ReserveSynced(PoolId indexed poolId, uint256 newBalance);
     event FeeOverrideApplied(PoolId indexed poolId, uint24 fee, bool penalty);
     event Paused(address indexed account, bool value);
+    event TargetRangeUpdated(PoolId indexed poolId, int24 tickLower, int24 tickUpper);
+    event LiquidityPolicyUpdated(PoolId indexed poolId, bool enforceAllowlist);
+    event LiquidityAllowlistUpdated(PoolId indexed poolId, address indexed account, bool allowed);
+
+    mapping(PoolId => mapping(address => bool)) private poolAllowlist;
 
     constructor(IPoolManager _poolManager, address _pythAdapter, address _reserveToken, address admin)
         BaseOverrideFee(_poolManager)
@@ -167,6 +181,44 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
         state = poolStates[poolId];
     }
 
+    function setTargetRange(PoolKey calldata key, int24 tickLower, int24 tickUpper) external onlyRole(CONFIG_ROLE) {
+        if (tickLower >= tickUpper) revert InvalidTargetRange();
+        PoolId poolId = key.toId();
+        PoolConfig storage config = poolConfigs[poolId];
+        config.targetTickLower = tickLower;
+        config.targetTickUpper = tickUpper;
+        config.targetRangeSet = true;
+        emit TargetRangeUpdated(poolId, tickLower, tickUpper);
+    }
+
+    function clearTargetRange(PoolKey calldata key) external onlyRole(CONFIG_ROLE) {
+        PoolId poolId = key.toId();
+        PoolConfig storage config = poolConfigs[poolId];
+        config.targetRangeSet = false;
+        config.targetTickLower = 0;
+        config.targetTickUpper = 0;
+        emit TargetRangeUpdated(poolId, 0, 0);
+    }
+
+    function setLiquidityPolicy(PoolKey calldata key, bool enforceAllowlist) external onlyRole(CONFIG_ROLE) {
+        PoolId poolId = key.toId();
+        poolConfigs[poolId].enforceAllowlist = enforceAllowlist;
+        emit LiquidityPolicyUpdated(poolId, enforceAllowlist);
+    }
+
+    function updateLiquidityAllowlist(PoolKey calldata key, address account, bool allowed)
+        external
+        onlyRole(CONFIG_ROLE)
+    {
+        PoolId poolId = key.toId();
+        poolAllowlist[poolId][account] = allowed;
+        emit LiquidityAllowlistUpdated(poolId, account, allowed);
+    }
+
+    function isAllowlisted(PoolKey calldata key, address account) external view returns (bool) {
+        return poolAllowlist[key.toId()][account];
+    }
+
     function _afterInitialize(address sender, PoolKey calldata key, uint160 sqrtPriceX96, int24 tick)
         internal
         override
@@ -246,6 +298,45 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
         return dynamicFee;
     }
 
+    function getHookPermissions() public pure override returns (Hooks.Permissions memory permissions) {
+        permissions = super.getHookPermissions();
+        permissions.beforeAddLiquidity = true;
+        permissions.beforeRemoveLiquidity = true;
+    }
+
+    function _beforeAddLiquidity(
+        address sender,
+        PoolKey calldata key,
+        ModifyLiquidityParams calldata params,
+        bytes calldata
+    ) internal override returns (bytes4) {
+        PoolId poolId = key.toId();
+        PoolState storage state = poolStates[poolId];
+        _enforceAddPolicy(poolId, sender, state.jitLiquidityActive || poolConfigs[poolId].enforceAllowlist);
+
+        if (state.jitLiquidityActive && poolConfigs[poolId].targetRangeSet) {
+            PoolConfig storage config = poolConfigs[poolId];
+            if (params.tickLower < config.targetTickLower || params.tickUpper > config.targetTickUpper) {
+                revert TargetRangeViolation();
+            }
+        }
+        return BaseHook.beforeAddLiquidity.selector;
+    }
+
+    function _beforeRemoveLiquidity(
+        address sender,
+        PoolKey calldata key,
+        ModifyLiquidityParams calldata,
+        bytes calldata
+    ) internal override returns (bytes4) {
+        PoolId poolId = key.toId();
+        PoolState storage state = poolStates[poolId];
+        if (state.jitLiquidityActive) {
+            _enforceAddPolicy(poolId, sender, true);
+        }
+        return BaseHook.beforeRemoveLiquidity.selector;
+    }
+
     function _computeDepegBps(int64 price0, int64 price1) internal pure returns (uint256) {
         int256 diff = int256(price0) - int256(price1);
         if (diff < 0) diff = -diff;
@@ -259,5 +350,11 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
         if (mode == PoolMode.Alert) return ALERT_FEE_PREMIUM;
         if (mode == PoolMode.Crisis) return CRISIS_FEE_PREMIUM;
         return 0;
+    }
+
+    function _enforceAddPolicy(PoolId poolId, address sender, bool mustBeAllowlisted) internal view {
+        if (!mustBeAllowlisted) return;
+        if (poolAllowlist[poolId][sender] || hasRole(KEEPER_ROLE, sender)) return;
+        revert UnauthorizedLiquidityProvider();
     }
 }

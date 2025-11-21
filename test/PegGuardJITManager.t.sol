@@ -90,6 +90,8 @@ contract PegGuardJITManagerTest is BaseTest {
             address(hook), address(positionManager), address(permit2), address(this), address(this)
         );
         hook.grantRole(hook.KEEPER_ROLE(), address(jitManager));
+        hook.updateLiquidityAllowlist(poolKey, address(jitManager), true);
+        hook.updateLiquidityAllowlist(poolKey, address(this), true);
 
         PegGuardJITManager.PoolJITConfig memory cfg = PegGuardJITManager.PoolJITConfig({
             tickLower: tickLower, tickUpper: tickUpper, maxDuration: 1 hours, reserveShareBps: 1000

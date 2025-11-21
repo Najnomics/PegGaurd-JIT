@@ -85,6 +85,7 @@ contract PegGuardKeeperTest is BaseTest {
             priceFeedId0: FEED_USDC, priceFeedId1: FEED_USDT, baseFee: 3000, maxFee: 50_000, minFee: 500
         });
         hook.configurePool(poolKey, params);
+        hook.updateLiquidityAllowlist(poolKey, address(this), true);
 
         keeper = new PegGuardKeeper(address(hook), address(this));
         hook.grantRole(hook.KEEPER_ROLE(), address(keeper));

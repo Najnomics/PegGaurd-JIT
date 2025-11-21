@@ -120,6 +120,94 @@ contract PegGuardHookTest is BaseTest {
         assertEq(state.lastOverrideFee, 3000 + hook.ALERT_FEE_PREMIUM() + hook.JIT_ACTIVE_PREMIUM());
     }
 
+    function testCannotAddLiquidityWhenAllowlistEnforced() public {
+        hook.setLiquidityPolicy(poolKey, true);
+
+        uint128 liquidityAmount = 1e18;
+        (uint256 amount0Expected, uint256 amount1Expected) = LiquidityAmounts.getAmountsForLiquidity(
+            Constants.SQRT_PRICE_1_1,
+            TickMath.getSqrtPriceAtTick(tickLower),
+            TickMath.getSqrtPriceAtTick(tickUpper),
+            liquidityAmount
+        );
+
+        vm.expectRevert(PegGuardHook.UnauthorizedLiquidityProvider.selector);
+        positionManager.mint(
+            poolKey,
+            tickLower,
+            tickUpper,
+            liquidityAmount,
+            amount0Expected + 1,
+            amount1Expected + 1,
+            address(this),
+            block.timestamp,
+            Constants.ZERO_BYTES
+        );
+
+        hook.updateLiquidityAllowlist(poolKey, address(this), true);
+        positionManager.mint(
+            poolKey,
+            tickLower,
+            tickUpper,
+            liquidityAmount,
+            amount0Expected + 1,
+            amount1Expected + 1,
+            address(this),
+            block.timestamp,
+            Constants.ZERO_BYTES
+        );
+    }
+
+    function testTargetRangeEnforcedDuringJIT() public {
+        int24 targetLower = tickLower + poolKey.tickSpacing;
+        int24 targetUpper = tickUpper - poolKey.tickSpacing;
+        hook.setTargetRange(poolKey, targetLower, targetUpper);
+        hook.updateLiquidityAllowlist(poolKey, address(this), true);
+        hook.setJITWindow(poolKey, true);
+
+        uint128 liquidityAmount = 5e17;
+        (uint256 amount0Expected, uint256 amount1Expected) = LiquidityAmounts.getAmountsForLiquidity(
+            Constants.SQRT_PRICE_1_1,
+            TickMath.getSqrtPriceAtTick(tickLower),
+            TickMath.getSqrtPriceAtTick(tickUpper),
+            liquidityAmount
+        );
+
+        vm.expectRevert(PegGuardHook.TargetRangeViolation.selector);
+        positionManager.mint(
+            poolKey,
+            tickLower,
+            tickUpper,
+            liquidityAmount,
+            amount0Expected + 1,
+            amount1Expected + 1,
+            address(this),
+            block.timestamp,
+            Constants.ZERO_BYTES
+        );
+
+        (uint256 allowedAmount0, uint256 allowedAmount1) = LiquidityAmounts.getAmountsForLiquidity(
+            Constants.SQRT_PRICE_1_1,
+            TickMath.getSqrtPriceAtTick(targetLower),
+            TickMath.getSqrtPriceAtTick(targetUpper),
+            liquidityAmount
+        );
+
+        positionManager.mint(
+            poolKey,
+            targetLower,
+            targetUpper,
+            liquidityAmount,
+            allowedAmount0 + 1,
+            allowedAmount1 + 1,
+            address(this),
+            block.timestamp,
+            Constants.ZERO_BYTES
+        );
+
+        hook.setJITWindow(poolKey, false);
+    }
+
     function _swap(bool zeroForOne) internal returns (BalanceDelta swapDelta) {
         swapDelta = swapRouter.swapExactTokensForTokens({
             amountIn: 1e18,

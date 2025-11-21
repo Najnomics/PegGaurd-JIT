@@ -20,8 +20,7 @@ contract ConfigurePegGuardScript is Script {
         address jitManagerAddress = vm.envAddress("PEG_GUARD_JIT_MANAGER");
         address deployer = vm.envAddress("PEG_GUARD_ADMIN");
 
-        uint24 poolFeeFlag =
-            uint24(vm.envOr("POOL_KEY_FEE", uint256(LPFeeLibrary.DYNAMIC_FEE_FLAG)));
+        uint24 poolFeeFlag = uint24(vm.envOr("POOL_KEY_FEE", uint256(LPFeeLibrary.DYNAMIC_FEE_FLAG)));
 
         PoolKey memory poolKey = PoolKey({
             currency0: Currency.wrap(vm.envAddress("POOL_CURRENCY0")),
@@ -34,30 +33,54 @@ contract ConfigurePegGuardScript is Script {
         vm.startBroadcast(deployer);
 
         PegGuardHook hook = PegGuardHook(hookAddress);
-        hook.configurePool(poolKey, PegGuardHook.ConfigurePoolParams({
-            priceFeedId0: vm.envBytes32("PRICE_FEED_ID0"),
-            priceFeedId1: vm.envBytes32("PRICE_FEED_ID1"),
-            baseFee: uint24(vm.envUint("POOL_BASE_FEE")),
-            maxFee: uint24(vm.envUint("POOL_MAX_FEE")),
-            minFee: uint24(vm.envUint("POOL_MIN_FEE"))
-        }));
+        hook.configurePool(
+            poolKey,
+            PegGuardHook.ConfigurePoolParams({
+                priceFeedId0: vm.envBytes32("PRICE_FEED_ID0"),
+                priceFeedId1: vm.envBytes32("PRICE_FEED_ID1"),
+                baseFee: uint24(vm.envUint("POOL_BASE_FEE")),
+                maxFee: uint24(vm.envUint("POOL_MAX_FEE")),
+                minFee: uint24(vm.envUint("POOL_MIN_FEE"))
+            })
+        );
+
+        // Optional target tick range
+        try vm.envInt("TARGET_TICK_LOWER") returns (int256 lowerRaw) {
+            int24 lower = int24(lowerRaw);
+            int24 upper = int24(int256(vm.envInt("TARGET_TICK_UPPER")));
+            hook.setTargetRange(poolKey, lower, upper);
+        } catch {}
+
+        bool enforceAllowlist = vm.envOr("POOL_ENFORCE_ALLOWLIST", false);
+        if (enforceAllowlist) {
+            hook.setLiquidityPolicy(poolKey, enforceAllowlist);
+        }
+        hook.updateLiquidityAllowlist(poolKey, jitManagerAddress, true);
+        hook.updateLiquidityAllowlist(poolKey, deployer, true);
+        hook.updateLiquidityAllowlist(poolKey, keeperAddress, true);
 
         PegGuardKeeper keeper = PegGuardKeeper(keeperAddress);
-        keeper.setKeeperConfig(poolKey, PegGuardKeeper.KeeperConfig({
-            alertBps: vm.envUint("KEEPER_ALERT_BPS"),
-            crisisBps: vm.envUint("KEEPER_CRISIS_BPS"),
-            jitActivationBps: vm.envUint("KEEPER_JIT_BPS"),
-            modeCooldown: vm.envUint("KEEPER_MODE_COOLDOWN"),
-            jitCooldown: vm.envUint("KEEPER_JIT_COOLDOWN")
-        }));
+        keeper.setKeeperConfig(
+            poolKey,
+            PegGuardKeeper.KeeperConfig({
+                alertBps: vm.envUint("KEEPER_ALERT_BPS"),
+                crisisBps: vm.envUint("KEEPER_CRISIS_BPS"),
+                jitActivationBps: vm.envUint("KEEPER_JIT_BPS"),
+                modeCooldown: vm.envUint("KEEPER_MODE_COOLDOWN"),
+                jitCooldown: vm.envUint("KEEPER_JIT_COOLDOWN")
+            })
+        );
 
         PegGuardJITManager jitManager = PegGuardJITManager(jitManagerAddress);
-        jitManager.configurePool(poolKey, PegGuardJITManager.PoolJITConfig({
-            tickLower: int24(int256(vm.envInt("JIT_TICK_LOWER"))),
-            tickUpper: int24(int256(vm.envInt("JIT_TICK_UPPER"))),
-            maxDuration: uint64(vm.envUint("JIT_MAX_DURATION")),
-            reserveShareBps: vm.envUint("JIT_RESERVE_SHARE_BPS")
-        }));
+        jitManager.configurePool(
+            poolKey,
+            PegGuardJITManager.PoolJITConfig({
+                tickLower: int24(int256(vm.envInt("JIT_TICK_LOWER"))),
+                tickUpper: int24(int256(vm.envInt("JIT_TICK_UPPER"))),
+                maxDuration: uint64(vm.envUint("JIT_MAX_DURATION")),
+                reserveShareBps: vm.envUint("JIT_RESERVE_SHARE_BPS")
+            })
+        );
 
         vm.stopBroadcast();
     }
