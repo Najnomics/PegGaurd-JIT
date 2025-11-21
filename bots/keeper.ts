@@ -22,6 +22,8 @@ const pythAbi = [
   "function updatePriceFeeds(bytes[] calldata priceUpdateData) external payable"
 ] as const;
 
+const DYNAMIC_FEE_FLAG = 0x800000;
+
 const {
   RPC_URL,
   PRIVATE_KEY,
@@ -29,7 +31,6 @@ const {
   PEG_GUARD_PYTH,
   POOL_CURRENCY0,
   POOL_CURRENCY1,
-  POOL_FEE,
   POOL_TICK_SPACING,
   PEG_GUARD_HOOK,
   PRICE_FEED_IDS,
@@ -44,7 +45,6 @@ if (
   !PEG_GUARD_PYTH ||
   !POOL_CURRENCY0 ||
   !POOL_CURRENCY1 ||
-  !POOL_FEE ||
   !POOL_TICK_SPACING ||
   !PEG_GUARD_HOOK ||
   !PRICE_FEED_IDS
@@ -52,10 +52,15 @@ if (
   throw new Error("Missing keeper configuration env vars");
 }
 
+const poolFeeFlag =
+  process.env.POOL_KEY_FEE !== undefined
+    ? Number(process.env.POOL_KEY_FEE)
+    : DYNAMIC_FEE_FLAG;
+
 const poolKey: PoolKey = {
   currency0: ethers.getAddress(POOL_CURRENCY0),
   currency1: ethers.getAddress(POOL_CURRENCY1),
-  fee: Number(POOL_FEE),
+  fee: poolFeeFlag,
   tickSpacing: Number(POOL_TICK_SPACING),
   hooks: ethers.getAddress(PEG_GUARD_HOOK)
 };

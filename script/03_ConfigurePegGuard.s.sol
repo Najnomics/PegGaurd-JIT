@@ -20,10 +20,13 @@ contract ConfigurePegGuardScript is Script {
         address jitManagerAddress = vm.envAddress("PEG_GUARD_JIT_MANAGER");
         address deployer = vm.envAddress("PEG_GUARD_ADMIN");
 
+        uint24 poolFeeFlag =
+            uint24(vm.envOr("POOL_KEY_FEE", uint256(LPFeeLibrary.DYNAMIC_FEE_FLAG)));
+
         PoolKey memory poolKey = PoolKey({
             currency0: Currency.wrap(vm.envAddress("POOL_CURRENCY0")),
             currency1: Currency.wrap(vm.envAddress("POOL_CURRENCY1")),
-            fee: uint24(vm.envUint("POOL_FEE")),
+            fee: poolFeeFlag,
             tickSpacing: int24(int256(vm.envInt("POOL_TICK_SPACING"))),
             hooks: IHooks(hookAddress)
         });

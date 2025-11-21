@@ -13,6 +13,8 @@ const hookAbi = [
   "function getPoolSnapshot((address,address,uint24,int24,address)) view returns (tuple(bytes32 priceFeedId0,bytes32 priceFeedId1,uint24 baseFee,uint24 maxFee,uint24 minFee),tuple(uint8 mode,bool jitLiquidityActive,uint256 lastDepegBps,uint256 lastConfidenceBps,uint24 lastOverrideFee,uint256 reserveBalance,uint256 totalPenaltyFees,uint256 totalRebates))"
 ] as const;
 
+const DYNAMIC_FEE_FLAG = 0x800000;
+
 const {
   RPC_URL,
   PRIVATE_KEY,
@@ -20,7 +22,6 @@ const {
   PEG_GUARD_HOOK,
   POOL_CURRENCY0,
   POOL_CURRENCY1,
-  POOL_FEE,
   POOL_TICK_SPACING,
   JIT_LIQUIDITY = "1000000000000000000",
   JIT_AMOUNT0_MAX = "0",
@@ -37,16 +38,20 @@ if (
   !PEG_GUARD_HOOK ||
   !POOL_CURRENCY0 ||
   !POOL_CURRENCY1 ||
-  !POOL_FEE ||
   !POOL_TICK_SPACING
 ) {
   throw new Error("Missing JIT bot env vars");
 }
 
+const poolFeeFlag =
+  process.env.POOL_KEY_FEE !== undefined
+    ? Number(process.env.POOL_KEY_FEE)
+    : DYNAMIC_FEE_FLAG;
+
 const poolKeyTuple = [
   ethers.getAddress(POOL_CURRENCY0),
   ethers.getAddress(POOL_CURRENCY1),
-  Number(POOL_FEE),
+  poolFeeFlag,
   Number(POOL_TICK_SPACING),
   ethers.getAddress(PEG_GUARD_HOOK)
 ] as const;

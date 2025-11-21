@@ -109,6 +109,10 @@ pnpm install # or npm install
 
 Run the bots by exporting the required env vars (RPC URL, private key, pool addresses, price feed IDs, etc.) and executing `pnpm keeper` / `pnpm jit`. Both scripts call real contracts (no mocks) and mirror the orchestration strategy from the CONTEXT repos.
 
+**Env hints**
+
+- `POOL_KEY_FEE` must equal the actual `PoolKey.fee` stored on-chain. For dynamic-fee pools set it to `0x800000` (`LPFeeLibrary.DYNAMIC_FEE_FLAG`) so the hook/keeper/JIT manager all hash to the same `PoolId`.
+
 
 ## Hackathon Delivery Roadmap
 
