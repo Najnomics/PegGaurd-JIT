@@ -86,3 +86,27 @@ Short-term priorities:
 2. Scaffold flash-loan-based liquidity scripts with mocked pools on anvil.
 3. Write invariant/fork tests ensuring fees never drop below the base rate and flash-loan repayment always succeeds.
 4. Document keeper configuration + environment variables once automation scripts exist.
+
+## Hackathon Delivery Roadmap
+
+- **Day 0 – Alignment & Contracts**
+  - Finalize pool assumptions (target stable pair, fee tiers, tick ranges).
+  - Implement the PegGuard hook contract with oracle-driven fee overrides and reserve accounting.
+  - Build oracle adapter and configuration access control so parameters can be tuned during judging.
+- **Day 1 – Liquidity Engine & Tests**
+  - Write Foundry scripts for JIT liquidity provisioning that borrow via flash loans (mocked locally, Aave-enabled on fork).
+  - Cover hook + orchestrator interactions with fork tests, including peg-worsening/widening scenarios and repayment assertions.
+- **Day 2 – Keeper & Monitoring**
+  - Ship a simple automation bot (Typescript or Solidity script runner) that reads oracle deviation, toggles hook configs, and fires the JIT script.
+  - Add logging/metrics hooks so demos can show historical peg defenses.
+- **Day 3 – Demo Polish**
+  - Package CLI commands plus a minimal web or terminal UI showing swap flow, rebates/penalties, and reserve status.
+  - Record deterministic scenarios (via scripts) to replay during the hackathon pitch.
+
+## Post-Hackathon Roadmap
+
+1. **Multi-Pool Expansion** — Support multiple stable pairs simultaneously with pool-specific thresholds and reserve assets.
+2. **Advanced Risk Controls** — Integrate volatility forecasts, circuit breakers, and asynchronous keeper voting to approve large liquidity moves.
+3. **Treasury Strategy** — Automate reserve deployment into low-risk yields when idle, and expose governance controls for fee splits.
+4. **Observability Suite** — Ship dashboards, on-chain event indexers, and alerting integrations for production readiness.
+5. **Audit & Mainnet Rollout** — Formal verification, external audits, beta launch on L2s, followed by guarded mainnet deployment.
