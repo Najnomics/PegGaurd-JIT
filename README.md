@@ -17,6 +17,7 @@ These capabilities allow the system to stay lean during calm periods while going
 3. **JIT Liquidity Orchestrator** — Uses Aave/flash-loan providers to borrow depth only when the sentinel escalates a pool. Liquidity is added just-in-time, sits inside a tight tick band, and is pulled immediately after the trade window closes so debt can be repaid.
 4. **Keeper & Automation Layer** — Off-chain executors monitor sentinel alerts, submit hook configuration updates, and trigger JIT liquidity scripts.
 5. **Reserve & Treasury Manager** — Receives penalty fees, funds rebates, and enforces configurable reserve ratios per pool.
+6. **On-chain Keeper Coordinator** — The new `PegGuardKeeper` contract mirrors the sentinel logic from our reference repo and atomically flips pool modes/JIT windows based on live Pyth feeds, enforcing cool-down windows and deterministic thresholds.
 
 ## Swap Lifecycle
 
@@ -86,6 +87,13 @@ Short-term priorities:
 2. Scaffold flash-loan-based liquidity scripts with mocked pools on anvil.
 3. Write invariant/fork tests ensuring fees never drop below the base rate and flash-loan repayment always succeeds.
 4. Document keeper configuration + environment variables once automation scripts exist.
+
+## On-chain Components
+
+- `PegGuardHook.sol` — Dynamic-fee hook that enforces oracle-aware penalties/rebates and tracks reserve state.
+- `PythOracleAdapter.sol` — Lean adapter around Pyth price feeds, including staleness checks inspired by the CONTEXT repo.
+- `PegGuardKeeper.sol` — Access-controlled sentinel/keeper contract that consumes Pyth prices, evaluates depeg severity, and directly calls into `PegGuardHook` to flip pool modes and JIT windows with configurable cooldowns.
+
 
 ## Hackathon Delivery Roadmap
 
