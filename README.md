@@ -93,6 +93,7 @@ Short-term priorities:
 - `PegGuardHook.sol` — Dynamic-fee hook that enforces oracle-aware penalties/rebates and tracks reserve state.
 - `PythOracleAdapter.sol` — Lean adapter around Pyth price feeds, including staleness checks inspired by the CONTEXT repo.
 - `PegGuardKeeper.sol` — Access-controlled sentinel/keeper contract that consumes Pyth prices, evaluates depeg severity, and directly calls into `PegGuardHook` to flip pool modes and JIT windows with configurable cooldowns.
+- `PegGuardJITManager.sol` — Burst-liquidity orchestrator that borrows/pulls capital from funders, mints concentrated liquidity, and streams a slice of profits back into PegGuard reserves before unwinding positions.
 
 
 ## Hackathon Delivery Roadmap
