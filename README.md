@@ -8,6 +8,8 @@ PegGuard JIT fuses oracle-aware risk controls with the Uniswap v4 just-in-time l
 
 These capabilities allow the system to stay lean during calm periods while going on the offensive the moment a depeg event unfolds.
 
+> **Competition target:** Built for the Uniswap Foundation prize pool under the *stable-asset Hooks* track, showcasing how v4 hooks can defend 1:1 pairs with adaptive fees and JIT liquidity.
+
 ## System Architecture
 
 1. **Sentinel & Oracle Adapter** — Continuously reads Pyth price feeds for both sides of the stable pair, computes depeg severity, and tags pools as *balanced*, *at risk*, or *in crisis*.
