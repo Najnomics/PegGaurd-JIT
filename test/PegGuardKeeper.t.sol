@@ -98,7 +98,7 @@ contract PegGuardKeeperTest is BaseTest {
     }
 
     function testKeeperPromotesToAlert() public {
-        _setPrices(970_000_00, 1_000_000_00, 30);
+        _setPrices(995_000_00, 1_000_000_00, 30);
         keeper.evaluateAndUpdate(poolKey);
         (, PegGuardHook.PoolState memory state) = hook.getPoolSnapshot(poolKey);
         assertEq(uint8(state.mode), uint8(PegGuardHook.PoolMode.Alert));

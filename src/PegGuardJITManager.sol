@@ -8,6 +8,7 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
 
+import {IPermit2} from "permit2/src/interfaces/IPermit2.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 import {Actions} from "@uniswap/v4-periphery/src/libraries/Actions.sol";
 
@@ -24,6 +25,7 @@ contract PegGuardJITManager is AccessControl {
 
     PegGuardHook public immutable hook;
     IPositionManager public immutable positionManager;
+    IPermit2 public immutable permit2;
     address public treasury;
 
     struct PoolJITConfig {
@@ -57,10 +59,16 @@ contract PegGuardJITManager is AccessControl {
     error DurationTooLong();
     error NativeCurrencyUnsupported();
 
-    constructor(address _hook, address _positionManager, address _treasury, address admin) {
-        require(_hook != address(0) && _positionManager != address(0), "PegGuardJITManager: zero address");
+    mapping(address => bool) private permitConfigured;
+
+    constructor(address _hook, address _positionManager, address _permit2, address _treasury, address admin) {
+        require(
+            _hook != address(0) && _positionManager != address(0) && _permit2 != address(0),
+            "PegGuardJITManager: zero address"
+        );
         hook = PegGuardHook(_hook);
         positionManager = IPositionManager(_positionManager);
+        permit2 = IPermit2(_permit2);
         treasury = _treasury;
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
@@ -101,6 +109,8 @@ contract PegGuardJITManager is AccessControl {
         _pullFunding(key.currency1, funder, amount1Max);
         _approveCurrency(key.currency0);
         _approveCurrency(key.currency1);
+        _ensurePermitApprovals(key.currency0);
+        _ensurePermitApprovals(key.currency1);
 
         uint256 amount0Spent;
         uint256 amount1Spent;
@@ -183,6 +193,14 @@ contract PegGuardJITManager is AccessControl {
         if (erc20.allowance(address(this), address(positionManager)) == 0) {
             erc20.approve(address(positionManager), type(uint256).max);
         }
+    }
+
+    function _ensurePermitApprovals(Currency currency) internal {
+        address token = Currency.unwrap(currency);
+        if (token == address(0) || permitConfigured[token]) return;
+        IERC20(token).approve(address(permit2), type(uint256).max);
+        permit2.approve(token, address(positionManager), type(uint160).max, type(uint48).max);
+        permitConfigured[token] = true;
     }
 
     function _mintPosition(

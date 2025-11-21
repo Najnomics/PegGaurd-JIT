@@ -86,7 +86,9 @@ contract PegGuardJITManagerTest is BaseTest {
         });
         hook.configurePool(poolKey, params);
 
-        jitManager = new PegGuardJITManager(address(hook), address(positionManager), address(this), address(this));
+        jitManager = new PegGuardJITManager(
+            address(hook), address(positionManager), address(permit2), address(this), address(this)
+        );
         hook.grantRole(hook.KEEPER_ROLE(), address(jitManager));
 
         PegGuardJITManager.PoolJITConfig memory cfg = PegGuardJITManager.PoolJITConfig({
