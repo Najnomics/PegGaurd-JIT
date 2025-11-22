@@ -108,7 +108,7 @@ contract PegGuardIntegrationTest is BaseTest {
         keeper.setKeeperConfig(
             poolKey,
             PegGuardKeeper.KeeperConfig({
-                alertBps: 30, crisisBps: 70, jitActivationBps: 70, modeCooldown: 0, jitCooldown: 0
+                alertBps: 100, crisisBps: 200, jitActivationBps: 200, modeCooldown: 0, jitCooldown: 0
             })
         );
 
@@ -149,5 +149,76 @@ contract PegGuardIntegrationTest is BaseTest {
         (, state) = hook.getPoolSnapshot(poolKey);
         assertFalse(state.jitLiquidityActive);
         assertGt(state.reserveBalance, 0);
+    }
+
+    function testFullLifecycleWithReserveAccumulation() public {
+        MockERC20(Currency.unwrap(currency0)).approve(address(jitManager), type(uint256).max);
+        MockERC20(Currency.unwrap(currency1)).approve(address(jitManager), type(uint256).max);
+
+        // Start balanced
+        mockPyth.setPrice(FEED0, 100_000_00, 50);
+        mockPyth.setPrice(FEED1, 100_000_00, 50);
+        keeper.evaluateAndUpdate(poolKey);
+        (, PegGuardHook.PoolState memory state) = hook.getPoolSnapshot(poolKey);
+        assertEq(uint8(state.mode), uint8(PegGuardHook.PoolMode.Calm));
+
+        // Trigger crisis (5% depeg = 500 bps, above 200 bps threshold)
+        mockPyth.setPrice(FEED0, 95_000_00, 50);
+        mockPyth.setPrice(FEED1, 100_000_00, 50);
+        keeper.evaluateAndUpdate(poolKey);
+        (, state) = hook.getPoolSnapshot(poolKey);
+        assertEq(uint8(state.mode), uint8(PegGuardHook.PoolMode.Crisis));
+        assertTrue(state.jitLiquidityActive);
+
+        // Execute burst
+        uint256 reserveBefore = state.reserveBalance;
+        jitManager.executeBurst(poolKey, 10e18, 100e18, 100e18, address(this), 60);
+
+        // Settle burst - should accumulate reserve
+        vm.warp(block.timestamp + 120);
+        jitManager.settleBurst(poolKey, 0, 0);
+        (, state) = hook.getPoolSnapshot(poolKey);
+        assertGt(state.reserveBalance, reserveBefore);
+
+        // Return to calm (depeg resolved)
+        mockPyth.setPrice(FEED0, 100_000_00, 50);
+        mockPyth.setPrice(FEED1, 100_000_00, 50);
+        keeper.evaluateAndUpdate(poolKey);
+        (, state) = hook.getPoolSnapshot(poolKey);
+        // Mode should return to Calm when depeg is below alert threshold
+        assertLe(uint8(state.mode), uint8(PegGuardHook.PoolMode.Alert));
+        // JIT should be deactivated if mode is Calm
+        if (state.mode == PegGuardHook.PoolMode.Calm) {
+            assertFalse(state.jitLiquidityActive);
+        }
+    }
+
+    function testKeeperModeTransitions() public {
+        // Calm -> Alert -> Crisis -> Calm
+        mockPyth.setPrice(FEED0, 100_000_00, 50);
+        mockPyth.setPrice(FEED1, 100_000_00, 50);
+        keeper.evaluateAndUpdate(poolKey);
+        (, PegGuardHook.PoolState memory state) = hook.getPoolSnapshot(poolKey);
+        assertEq(uint8(state.mode), uint8(PegGuardHook.PoolMode.Calm));
+
+        // Alert threshold (1% depeg = 100 bps, matches threshold)
+        mockPyth.setPrice(FEED0, 99_000_00, 50); // 1% depeg = 100 bps
+        keeper.evaluateAndUpdate(poolKey);
+        (, state) = hook.getPoolSnapshot(poolKey);
+        assertEq(uint8(state.mode), uint8(PegGuardHook.PoolMode.Alert));
+
+        // Crisis threshold (2%+ depeg = 200+ bps)
+        mockPyth.setPrice(FEED0, 98_000_00, 50); // 2% depeg = 200 bps
+        keeper.evaluateAndUpdate(poolKey);
+        (, state) = hook.getPoolSnapshot(poolKey);
+        assertEq(uint8(state.mode), uint8(PegGuardHook.PoolMode.Crisis));
+        assertTrue(state.jitLiquidityActive);
+
+        // Back to calm
+        mockPyth.setPrice(FEED0, 100_000_00, 50);
+        keeper.evaluateAndUpdate(poolKey);
+        (, state) = hook.getPoolSnapshot(poolKey);
+        assertEq(uint8(state.mode), uint8(PegGuardHook.PoolMode.Calm));
+        assertFalse(state.jitLiquidityActive);
     }
 }

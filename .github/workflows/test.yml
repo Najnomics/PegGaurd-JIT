@@ -1,16 +1,13 @@
-name: Test Suite
+name: Test
 
 on:
-  workflow_dispatch:
-  # push:
-  # pull_request:
-
-env:
-  FOUNDRY_PROFILE: ci
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
 
 jobs:
   test:
-    name: Foundry Project
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,15 +17,16 @@ jobs:
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
-          version: stable
+          version: nightly
 
-      - name: Build
+      - name: Run tests
         run: |
-          forge --version
+          forge test --gas-report
+
+      - name: Check formatting
+        run: |
+          forge fmt --check
+
+      - name: Build contracts
+        run: |
           forge build --sizes
-        id: build
-
-      - name: Test
-        run: |
-          forge test -vvv
-        id: test
