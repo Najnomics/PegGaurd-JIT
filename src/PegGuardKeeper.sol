@@ -35,6 +35,8 @@ contract PegGuardKeeper is AccessControl {
     event KeeperEvaluated(
         PoolId indexed poolId, PegGuardHook.PoolMode targetMode, bool jitTarget, uint256 depegBps, uint256 confidenceBps
     );
+    event StaleFeedDetected(PoolId indexed poolId, bytes32 feedId);
+    event ReserveDeltaReported(PoolId indexed poolId, int256 delta);
 
     constructor(address _hook, address admin) {
         require(_hook != address(0), "PegGuardKeeper: invalid hook");
@@ -65,8 +67,14 @@ contract PegGuardKeeper is AccessControl {
             "PegGuardKeeper: feeds missing"
         );
 
-        (uint256 depegBps, uint256 confRatio) = _observe(poolConfig);
+        (uint256 depegBps, uint256 confRatio, bool stale) = _observe(poolConfig);
         uint256 volThreshold = hook.VOLATILITY_THRESHOLD_BPS();
+
+        // If feeds are stale, log but don't update mode (fallback to current state)
+        if (stale) {
+            emit KeeperEvaluated(poolId, state.mode, state.jitLiquidityActive, depegBps, confRatio);
+            return;
+        }
 
         PegGuardHook.PoolMode targetMode = _modeFromDepeg(depegBps, confRatio, cfg, volThreshold);
         bool jitTarget = depegBps >= cfg.jitActivationBps && confRatio <= volThreshold;
@@ -82,6 +90,13 @@ contract PegGuardKeeper is AccessControl {
         }
 
         emit KeeperEvaluated(poolId, targetMode, jitTarget, depegBps, confRatio);
+    }
+
+    /// @notice Report reserve delta to the hook (for tracking penalty fees allocated to reserve)
+    /// @param key The pool key
+    /// @param delta The reserve delta (positive for additions, negative for withdrawals)
+    function reportReserveDelta(PoolKey calldata key, int256 delta) external onlyRole(EXECUTOR_ROLE) {
+        hook.reportReserveDelta(key, delta);
     }
 
     function _modeFromDepeg(uint256 depegBps, uint256 confRatio, KeeperConfig memory cfg, uint256 volThreshold)
@@ -108,13 +123,19 @@ contract PegGuardKeeper is AccessControl {
     function _observe(PegGuardHook.PoolConfig memory poolConfig)
         internal
         view
-        returns (uint256 depegBps, uint256 confBps)
+        returns (uint256 depegBps, uint256 confBps, bool stale)
     {
-        (int64 price0, uint64 conf0,) = adapter.getPriceWithConfidence(poolConfig.priceFeedId0);
-        (int64 price1, uint64 conf1,) = adapter.getPriceWithConfidence(poolConfig.priceFeedId1);
-        uint256 confRatio =
-            (adapter.computeConfRatioBps(price0, conf0) + adapter.computeConfRatioBps(price1, conf1)) / 2;
-        return (_computeDepegBps(price0, price1), confRatio);
+        try adapter.getPriceWithConfidence(poolConfig.priceFeedId0) returns (int64 price0, uint64 conf0, uint256) {
+            try adapter.getPriceWithConfidence(poolConfig.priceFeedId1) returns (int64 price1, uint64 conf1, uint256) {
+                uint256 confRatio =
+                    (adapter.computeConfRatioBps(price0, conf0) + adapter.computeConfRatioBps(price1, conf1)) / 2;
+                return (_computeDepegBps(price0, price1), confRatio, false);
+            } catch {
+                return (0, type(uint256).max, true); // Stale feed
+            }
+        } catch {
+            return (0, type(uint256).max, true); // Stale feed
+        }
     }
 
     function _computeDepegBps(int64 price0, int64 price1) internal pure returns (uint256) {

@@ -15,7 +15,7 @@ export type KeeperJobConfig = {
   pool: PoolKeyConfig;
   priceFeedIds: string[];
   intervalMs?: number;
-  pythEndpoint?: string;
+  pythEndpoint?: string | string[]; // Support multiple endpoints for failover
 };
 
 export type KeeperConfig = {
