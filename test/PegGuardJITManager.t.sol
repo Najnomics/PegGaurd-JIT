@@ -119,9 +119,8 @@ contract PegGuardJITManagerTest is BaseTest {
         uint256 funderToken0Before = IERC20(token0).balanceOf(address(this));
         uint256 funderToken1Before = IERC20(token1).balanceOf(address(this));
 
-        try jitManager.executeBurst(poolKey, 10e18, 1_000e18, 1_000e18, address(this), 30 minutes) returns (uint256) {} catch (
-            bytes memory err
-        ) {
+        try jitManager.executeBurst(poolKey, 10e18, 1_000e18, 1_000e18, address(this), 30 minutes) returns (uint256) {}
+        catch (bytes memory err) {
             emit log_bytes(err);
             fail();
         }
@@ -129,7 +128,8 @@ contract PegGuardJITManagerTest is BaseTest {
         assertTrue(stateAfterBurst.jitLiquidityActive);
 
         vm.warp(block.timestamp + 31 minutes);
-        try jitManager.settleBurst(poolKey, 0, 0) {} catch (bytes memory err) {
+        try jitManager.settleBurst(poolKey, 0, 0) {}
+        catch (bytes memory err) {
             emit log_bytes(err);
             fail();
         }
@@ -162,10 +162,7 @@ contract PegGuardJITManagerTest is BaseTest {
         int24 jitLower = -300;
         int24 jitUpper = 300;
         PegGuardJITManager.PoolJITConfig memory cfg = PegGuardJITManager.PoolJITConfig({
-            tickLower: jitLower,
-            tickUpper: jitUpper,
-            maxDuration: 1 hours,
-            reserveShareBps: 1000
+            tickLower: jitLower, tickUpper: jitUpper, maxDuration: 1 hours, reserveShareBps: 1000
         });
         jitManager.configurePool(poolKey, cfg);
 

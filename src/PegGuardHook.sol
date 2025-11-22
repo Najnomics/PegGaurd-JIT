@@ -89,7 +89,7 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
 
     mapping(PoolId => PoolConfig) public poolConfigs;
     mapping(PoolId => PoolState) public poolStates;
-    
+
     // Separate mappings for reliable storage reads
     // These track the actual values set, independent of struct storage
     mapping(PoolId => bool) private _enforceAllowlistFlags;
@@ -120,7 +120,14 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
     event TargetRange(PoolId indexed poolId, int24 tickLower, int24 tickUpper);
     event DepegPenaltyApplied(PoolId indexed poolId, bool zeroForOne, uint24 fee, uint256 reserveAmount);
     event DepegRebateIssued(PoolId indexed poolId, address trader, uint256 amount);
-    event DebugAllowlist(PoolId indexed poolId, bool stateEnforce, bool configEnforce, bool enforceAllowlist, bool jitActive, address sender);
+    event DebugAllowlist(
+        PoolId indexed poolId,
+        bool stateEnforce,
+        bool configEnforce,
+        bool enforceAllowlist,
+        bool jitActive,
+        address sender
+    );
     mapping(PoolId => mapping(address => bool)) private poolAllowlist;
 
     constructor(IPoolManager _poolManager, address _pythAdapter, address _reserveToken, address admin)
@@ -244,16 +251,16 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
     {
         PoolState storage state = poolStates[poolId];
         if (state.reserveBalance == 0) return 0;
-        
+
         // Sentinel's rebate formula: MIN_REBATE_BPS + (depeg reduction * REBATE_SCALE_BPS)
         uint256 rebateBps = MIN_REBATE_BPS;
         if (depegReductionBps > 0) {
             rebateBps += (depegReductionBps / 10) * REBATE_SCALE_BPS;
         }
-        
+
         // Calculate rebate amount from reserve balance
         rebateAmount = (state.reserveBalance * rebateBps) / 10_000;
-        
+
         // Cap rebate at available reserve
         if (rebateAmount > state.reserveBalance) {
             rebateAmount = state.reserveBalance;
@@ -359,14 +366,14 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
         int64 price1;
         uint64 conf0;
         uint64 conf1;
-        
+
         try pythAdapter.getPriceWithConfidence(config.priceFeedId0) returns (int64 _price0, uint64 _conf0, uint256) {
             price0 = _price0;
             conf0 = _conf0;
         } catch {
             staleFeed = true;
         }
-        
+
         try pythAdapter.getPriceWithConfidence(config.priceFeedId1) returns (int64 _price1, uint64 _conf1, uint256) {
             price1 = _price1;
             conf1 = _conf1;
@@ -426,7 +433,7 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
         // Read directly from storage mappings (exact same approach as getPoolSnapshot)
         PoolConfig storage config = poolConfigs[poolId];
         PoolState storage storedState = poolStates[poolId];
-        
+
         // Check if allowlist enforcement is needed
         // Mirror getPoolSnapshot semantics: stored state is source of truth, then config/mappings
         bool enforceAllowlist = storedState.enforceAllowlist;
@@ -438,14 +445,21 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
             jitActive = _jitActiveFlags[poolId];
         }
         bool mustBeAllowlisted = jitActive || enforceAllowlist;
-        
+
         // In Uniswap v4, the sender is the caller (e.g., PositionManager)
         // We need to check if the sender is allowlisted
         address liquidityProvider = sender;
-        
+
         // Try to get the actual owner if sender is a PositionManager/router
         // For now, we check the sender directly (PositionManager should be allowlisted)
-        emit DebugAllowlist(poolId, storedState.enforceAllowlist, config.enforceAllowlist, enforceAllowlist, jitActive, liquidityProvider);
+        emit DebugAllowlist(
+            poolId,
+            storedState.enforceAllowlist,
+            config.enforceAllowlist,
+            enforceAllowlist,
+            jitActive,
+            liquidityProvider
+        );
         _enforceAddPolicy(poolId, liquidityProvider, mustBeAllowlisted);
 
         // Enforce target range when JIT is active (regardless of allowlist state)
@@ -499,10 +513,10 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
         uint24 penalty = uint24((depegBps / 10) * 100);
         dynamicFee = ctx.feeFloor + penalty;
         if (dynamicFee > ctx.maxFee) dynamicFee = ctx.maxFee;
-        
+
         uint24 penaltyAmount = dynamicFee > ctx.feeFloor ? dynamicFee - ctx.feeFloor : 0;
         state.totalPenaltyFees += penaltyAmount;
-        
+
         // Calculate reserve amount based on penalty and reserve cut
         // Note: In Uniswap v4, fees are collected by the pool and distributed to LPs.
         // The reserve cut represents the portion that should be allocated to the reserve.
@@ -514,7 +528,7 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
             // This is a placeholder - actual implementation would need fee accounting
             reserveAmount = (uint256(penaltyAmount) * ctx.reserveCutBps) / 10_000;
         }
-        
+
         emit DepegPenaltyApplied(poolId, zeroForOne, dynamicFee, reserveAmount);
         emit FeeOverrideApplied(poolId, dynamicFee, true);
     }
@@ -530,11 +544,11 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
             dynamicFee = ctx.feeFloor - rebate;
         }
         if (dynamicFee < ctx.minFee) dynamicFee = ctx.minFee;
-        
+
         uint24 rebateAmount = ctx.feeFloor > dynamicFee ? ctx.feeFloor - dynamicFee : 0;
         // Track rebate fee reduction (actual token rebate is issued separately via issueRebate)
         state.totalRebates += rebateAmount;
-        
+
         emit FeeOverrideApplied(poolId, dynamicFee, false);
     }
 

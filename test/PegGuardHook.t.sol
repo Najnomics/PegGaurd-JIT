@@ -311,8 +311,6 @@ contract PegGuardHookTest is BaseTest {
         uint256 deadline,
         bytes memory hookData
     ) external returns (uint256 tokenId, BalanceDelta delta) {
-        return positionManager.mint(
-            key, lower, upper, liquidity, amount0Max, amount1Max, recipient, deadline, hookData
-        );
+        return positionManager.mint(key, lower, upper, liquidity, amount0Max, amount1Max, recipient, deadline, hookData);
     }
 }

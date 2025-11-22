@@ -29,9 +29,12 @@ library AddressConstants {
 
     // Common Pyth price feed IDs (mainnet)
     // Note: These are example IDs - replace with actual Pyth feed IDs for your network
-    bytes32 constant PYTH_USDC_USD = bytes32(uint256(0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a));
-    bytes32 constant PYTH_USDT_USD = bytes32(uint256(0x2b89b9dc8fdf9f34709a5b106b472f5f85bb74e0e0b5c0b0e0b5c0b0e0b5c0b));
-    bytes32 constant PYTH_ETH_USD = bytes32(uint256(0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace));
+    bytes32 constant PYTH_USDC_USD =
+        bytes32(uint256(0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a));
+    bytes32 constant PYTH_USDT_USD =
+        bytes32(uint256(0x2b89b9dc8fdf9f34709a5b106b472f5f85bb74e0e0b5c0b0e0b5c0b0e0b5c0b));
+    bytes32 constant PYTH_ETH_USD =
+        bytes32(uint256(0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace));
     bytes32 constant PYTH_DAI_USD = bytes32(uint256(0xb0948a5e5313200C6332C7F626e5c5C5C5C5C5C5C5C5C5C5C5C5C5C5C5C5C5C));
 
     /// @notice Get token address for a given network and token symbol

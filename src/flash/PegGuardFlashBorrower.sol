@@ -89,7 +89,7 @@ contract PegGuardFlashBorrower is AccessControl, IFlashLoanSimpleReceiver {
 
         // Calculate repayment: principal + premium
         uint256 repayment = amount + premium;
-        
+
         // Check if we have enough of the loaned asset to repay
         // If the burst returned the other currency, we'd need to swap it, but for now
         // we require that the burst returns enough of the loaned asset
