@@ -151,4 +151,48 @@ contract PegGuardJITManagerTest is BaseTest {
         assertGt(amount0Out, 0);
         assertGt(IERC20(token0).balanceOf(address(this)), 0);
     }
+
+    function testTickRangeEnforcement() public {
+        // Set a target range on the hook
+        int24 targetLower = -600;
+        int24 targetUpper = 600;
+        hook.setTargetRange(poolKey, targetLower, targetUpper);
+
+        // Configure JIT manager with ticks that match the target range
+        int24 jitLower = -300;
+        int24 jitUpper = 300;
+        PegGuardJITManager.PoolJITConfig memory cfg = PegGuardJITManager.PoolJITConfig({
+            tickLower: jitLower,
+            tickUpper: jitUpper,
+            maxDuration: 1 hours,
+            reserveShareBps: 1000
+        });
+        jitManager.configurePool(poolKey, cfg);
+
+        // Should succeed - ticks are within target range
+        jitManager.executeBurst(poolKey, 5e18, 100e18, 100e18, address(this), 30 minutes);
+
+        // Settle the burst first
+        vm.warp(block.timestamp + 31 minutes);
+        jitManager.settleBurst(poolKey, 0, 0);
+
+        // Now configure with ticks outside the target range
+        int24 invalidLower = -1200;
+        int24 invalidUpper = 1200;
+        cfg.tickLower = invalidLower;
+        cfg.tickUpper = invalidUpper;
+        jitManager.configurePool(poolKey, cfg);
+
+        // Should fail - ticks are outside target range
+        vm.expectRevert();
+        jitManager.executeBurst(poolKey, 5e18, 100e18, 100e18, address(this), 30 minutes);
+
+        // Flash burst should also enforce the range
+        // Prepare tokens first
+        MockERC20(token0).transfer(address(jitManager), 20e18);
+        MockERC20(token1).transfer(address(jitManager), 20e18);
+        // Then expect revert
+        vm.expectRevert();
+        jitManager.flashBurst(poolKey, 5e18, 10e18, 10e18, address(0), bytes(""));
+    }
 }

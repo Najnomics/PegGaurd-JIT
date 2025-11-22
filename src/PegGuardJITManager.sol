@@ -110,6 +110,16 @@ contract PegGuardJITManager is AccessControl {
         BurstState storage burst = bursts[poolId];
         if (burst.active) revert BurstActive();
 
+        // Validate that configured ticks match hook's target range (if set)
+        // This ensures JIT liquidity is only added within the allowed range
+        (PegGuardHook.PoolConfig memory poolConfig,) = hook.getPoolSnapshot(key);
+        if (poolConfig.targetRangeSet) {
+            require(
+                cfg.tickLower >= poolConfig.targetTickLower && cfg.tickUpper <= poolConfig.targetTickUpper,
+                "PegGuardJITManager: ticks outside target range"
+            );
+        }
+
         _pullFunding(key.currency0, funder, amount0Max);
         _pullFunding(key.currency1, funder, amount1Max);
         _approveCurrency(key.currency0);
@@ -193,6 +203,15 @@ contract PegGuardJITManager is AccessControl {
         PoolId poolId = key.toId();
         PoolJITConfig storage cfg = poolConfigs[poolId];
         if (cfg.tickLower >= cfg.tickUpper) revert PoolNotConfigured();
+
+        // Validate that configured ticks match hook's target range (if set)
+        (PegGuardHook.PoolConfig memory poolConfig,) = hook.getPoolSnapshot(key);
+        if (poolConfig.targetRangeSet) {
+            require(
+                cfg.tickLower >= poolConfig.targetTickLower && cfg.tickUpper <= poolConfig.targetTickUpper,
+                "PegGuardJITManager: ticks outside target range"
+            );
+        }
 
         _approveCurrency(key.currency0);
         _approveCurrency(key.currency1);
