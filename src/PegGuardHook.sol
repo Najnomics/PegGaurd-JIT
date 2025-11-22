@@ -89,6 +89,11 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
 
     mapping(PoolId => PoolConfig) public poolConfigs;
     mapping(PoolId => PoolState) public poolStates;
+    
+    // Separate mappings for reliable storage reads
+    // These track the actual values set, independent of struct storage
+    mapping(PoolId => bool) private _enforceAllowlistFlags;
+    mapping(PoolId => bool) private _jitActiveFlags;
 
     PythOracleAdapter public immutable pythAdapter;
     address public immutable reserveToken;
@@ -177,8 +182,9 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
     function setJITWindow(PoolKey calldata key, bool active) external onlyRole(KEEPER_ROLE) whenNotPaused {
         PoolId poolId = key.toId();
         PoolState storage state = poolStates[poolId];
-        if (state.jitLiquidityActive == active) return;
+        if (state.jitLiquidityActive == active && _jitActiveFlags[poolId] == active) return;
         state.jitLiquidityActive = active;
+        _jitActiveFlags[poolId] = active; // Track in separate mapping
         emit JITWindowUpdated(poolId, active);
     }
 
@@ -291,6 +297,7 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
         PoolId poolId = key.toId();
         poolConfigs[poolId].enforceAllowlist = enforceAllowlist;
         poolStates[poolId].enforceAllowlist = enforceAllowlist;
+        _enforceAllowlistFlags[poolId] = enforceAllowlist; // Track in separate mapping
         emit LiquidityPolicyUpdated(poolId, enforceAllowlist);
     }
 
@@ -416,19 +423,19 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
         bytes calldata
     ) internal override returns (bytes4) {
         PoolId poolId = key.toId();
-        PoolState storage state = poolStates[poolId];
+        // Read directly from storage mappings (same approach as getPoolSnapshot)
         PoolConfig storage config = poolConfigs[poolId];
+        PoolState storage storedState = poolStates[poolId];
         
         // Check if allowlist enforcement is needed
-        // setLiquidityPolicy sets both state.enforceAllowlist and config.enforceAllowlist
-        // We check both to ensure the flag is read correctly
-        // State takes precedence as it can be set independently and persists even if config is cleared
-        bool enforceAllowlist = state.enforceAllowlist;
-        // Fall back to config if state hasn't been set (defaults to false)
+        // Use separate mappings first, then fall back to struct storage (same as getPoolSnapshot)
+        bool enforceAllowlist = _enforceAllowlistFlags[poolId];
         if (!enforceAllowlist) {
-            enforceAllowlist = config.enforceAllowlist;
+            // Fall back to struct storage (same pattern as getPoolSnapshot)
+            enforceAllowlist = storedState.enforceAllowlist || config.enforceAllowlist;
         }
-        bool mustBeAllowlisted = state.jitLiquidityActive || enforceAllowlist;
+        bool jitActive = _jitActiveFlags[poolId] || storedState.jitLiquidityActive;
+        bool mustBeAllowlisted = jitActive || enforceAllowlist;
         
         // In Uniswap v4, the sender is the caller (e.g., PositionManager)
         // We need to check if the sender is allowlisted
@@ -436,11 +443,12 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
         
         // Try to get the actual owner if sender is a PositionManager/router
         // For now, we check the sender directly (PositionManager should be allowlisted)
-        emit DebugAllowlist(poolId, state.enforceAllowlist, config.enforceAllowlist, enforceAllowlist, state.jitLiquidityActive, liquidityProvider);
+        emit DebugAllowlist(poolId, storedState.enforceAllowlist, config.enforceAllowlist, enforceAllowlist, jitActive, liquidityProvider);
         _enforceAddPolicy(poolId, liquidityProvider, mustBeAllowlisted);
 
         // Enforce target range when JIT is active (regardless of allowlist state)
-        if (state.jitLiquidityActive && config.targetRangeSet) {
+        // Also check config.targetRangeSet to ensure range is configured
+        if (jitActive && config.targetRangeSet) {
             if (params.tickLower < config.targetTickLower || params.tickUpper > config.targetTickUpper) {
                 revert TargetRangeViolation();
             }
