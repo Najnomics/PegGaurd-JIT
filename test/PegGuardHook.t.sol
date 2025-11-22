@@ -21,6 +21,7 @@ import {EasyPosm} from "./utils/libraries/EasyPosm.sol";
 import {BaseTest} from "./utils/BaseTest.sol";
 import {PegGuardHook} from "../src/PegGuardHook.sol";
 import {PythOracleAdapter} from "../src/oracle/PythOracleAdapter.sol";
+import {PegGuardLiquidityLib} from "../src/libraries/PegGuardLiquidityLib.sol";
 import {MockPyth} from "./mocks/MockPyth.sol";
 import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 
@@ -104,7 +105,7 @@ contract PegGuardHookTest is BaseTest {
         });
 
         hook.configurePool(poolKey, params);
-        hook.grantRole(hook.KEEPER_ROLE(), address(this));
+        hook.setKeeperRole(address(this), true);
         hook.updateLiquidityAllowlist(poolKey, address(positionManager), true);
 
         _setPrices(1_000_000_00, 1_000_000_00, 100);
@@ -191,7 +192,7 @@ contract PegGuardHookTest is BaseTest {
         ) {
             fail("expected allowlist revert");
         } catch (bytes memory err) {
-            _assertBeforeAddLiquidityRevert(err, PegGuardHook.UnauthorizedLiquidityProvider.selector);
+            _assertBeforeAddLiquidityRevert(err, PegGuardLiquidityLib.UnauthorizedLiquidityProvider.selector);
         }
 
         hook.updateLiquidityAllowlist(poolKey, address(positionManager), true);

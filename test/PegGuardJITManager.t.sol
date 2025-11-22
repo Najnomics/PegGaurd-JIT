@@ -102,7 +102,7 @@ contract PegGuardJITManagerTest is BaseTest {
         jitManager = new PegGuardJITManager(
             address(hook), address(positionManager), address(permit2), address(this), address(this)
         );
-        hook.grantRole(hook.KEEPER_ROLE(), address(jitManager));
+        hook.setKeeperRole(address(jitManager), true);
         hook.updateLiquidityAllowlist(poolKey, address(positionManager), true);
         hook.updateLiquidityAllowlist(poolKey, address(this), true);
 

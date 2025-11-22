@@ -103,7 +103,7 @@ contract PegGuardIntegrationTest is BaseTest {
         hook.updateLiquidityAllowlist(poolKey, address(positionManager), true);
 
         keeper = new PegGuardKeeper(address(hook), address(this));
-        hook.grantRole(hook.KEEPER_ROLE(), address(keeper));
+        hook.setKeeperRole(address(keeper), true);
 
         keeper.setKeeperConfig(
             poolKey,
@@ -115,7 +115,7 @@ contract PegGuardIntegrationTest is BaseTest {
         jitManager = new PegGuardJITManager(
             address(hook), address(positionManager), address(permit2), address(this), address(this)
         );
-        hook.grantRole(hook.KEEPER_ROLE(), address(jitManager));
+        hook.setKeeperRole(address(jitManager), true);
         hook.updateLiquidityAllowlist(poolKey, address(positionManager), true);
 
         jitManager.configurePool(

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IPoolManager, SwapParams, ModifyLiquidityParams} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
@@ -10,28 +9,25 @@ import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {BaseOverrideFee} from "@openzeppelin/uniswap-hooks/src/fee/BaseOverrideFee.sol";
 import {BaseHook} from "@openzeppelin/uniswap-hooks/src/base/BaseHook.sol";
 import {PythOracleAdapter} from "./oracle/PythOracleAdapter.sol";
+import {PegGuardFeeHelper} from "./helpers/PegGuardFeeHelper.sol";
+import {PegGuardReserveLib} from "./libraries/PegGuardReserveLib.sol";
+import {PegGuardFeeLib} from "./libraries/PegGuardFeeLib.sol";
+import {PegGuardLiquidityLib} from "./libraries/PegGuardLiquidityLib.sol";
 
-contract PegGuardHook is BaseOverrideFee, AccessControl {
+contract PegGuardHook is BaseOverrideFee {
     using PoolIdLibrary for PoolKey;
-
-    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
-    bytes32 public constant CONFIG_ROLE = keccak256("CONFIG_ROLE");
-    bytes32 public constant KEEPER_ROLE = keccak256("KEEPER_ROLE");
-    bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
 
     uint256 public constant VOLATILITY_THRESHOLD_BPS = 100; // 1%
     uint256 public constant DEPEG_THRESHOLD_BPS = 50; // 0.5%
-    uint256 public constant MIN_RESERVE_CUT_BPS = 2000; // 20%
-    uint256 public constant MAX_RESERVE_CUT_BPS = 5000; // 50%
-    uint256 public constant MIN_REBATE_BPS = 500; // 0.05%
-    uint256 public constant REBATE_SCALE_BPS = 10; // 0.001% per 10 bps reduction
+    uint256 public constant MIN_RESERVE_CUT_BPS = PegGuardReserveLib.MIN_RESERVE_CUT_BPS;
+    uint256 public constant MAX_RESERVE_CUT_BPS = PegGuardReserveLib.MAX_RESERVE_CUT_BPS;
 
     uint24 public constant DEFAULT_BASE_FEE = 3000; // 0.3%
     uint24 public constant DEFAULT_MAX_FEE = 50_000; // 5%
     uint24 public constant DEFAULT_MIN_FEE = 500; // 0.05%
-    uint24 public constant ALERT_FEE_PREMIUM = 200; // 0.02%
-    uint24 public constant CRISIS_FEE_PREMIUM = 600; // 0.06%
-    uint24 public constant JIT_ACTIVE_PREMIUM = 100; // 0.01%
+    uint24 public constant ALERT_FEE_PREMIUM = PegGuardFeeLib.ALERT_FEE_PREMIUM;
+    uint24 public constant CRISIS_FEE_PREMIUM = PegGuardFeeLib.CRISIS_FEE_PREMIUM;
+    uint24 public constant JIT_ACTIVE_PREMIUM = PegGuardFeeLib.JIT_ACTIVE_PREMIUM;
 
     enum PoolMode {
         Calm,
@@ -99,14 +95,24 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
     address public immutable reserveToken;
 
     bool public paused;
+    PegGuardFeeHelper public immutable feeHelper;
+    address public admin;
+
+    mapping(address => bool) private _configRole;
+    mapping(address => bool) private _keeperRole;
+    mapping(address => bool) private _pauserRole;
+
+    bytes32 private constant _ROLE_CONFIG = keccak256("CONFIG_ROLE");
+    bytes32 private constant _ROLE_KEEPER = keccak256("KEEPER_ROLE");
+    bytes32 private constant _ROLE_PAUSER = keccak256("PAUSER_ROLE");
 
     error MissingPriceFeeds();
     error InvalidAmount();
     error InsufficientReserve();
-    error UnauthorizedLiquidityProvider();
     error TargetRangeViolation();
     error InvalidTargetRange();
     error ReserveTokenNotSet();
+    error Unauthorized();
 
     event PoolConfigured(PoolId indexed poolId, bytes32 feed0, bytes32 feed1, uint24 baseFee);
     event PoolModeUpdated(PoolId indexed poolId, PoolMode mode);
@@ -128,19 +134,22 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
         bool jitActive,
         address sender
     );
+    event AdminTransferred(address indexed previousAdmin, address indexed newAdmin);
+    event RoleUpdated(bytes32 indexed role, address indexed account, bool enabled);
     mapping(PoolId => mapping(address => bool)) private poolAllowlist;
 
-    constructor(IPoolManager _poolManager, address _pythAdapter, address _reserveToken, address admin)
+    constructor(IPoolManager _poolManager, address _pythAdapter, address _reserveToken, address admin_)
         BaseOverrideFee(_poolManager)
     {
+        if (admin_ == address(0)) revert Unauthorized();
         pythAdapter = PythOracleAdapter(_pythAdapter);
         reserveToken = _reserveToken;
+        feeHelper = new PegGuardFeeHelper();
+        admin = admin_;
 
-        _grantRole(DEFAULT_ADMIN_ROLE, admin);
-        _grantRole(ADMIN_ROLE, admin);
-        _grantRole(CONFIG_ROLE, admin);
-        _grantRole(KEEPER_ROLE, admin);
-        _grantRole(PAUSER_ROLE, admin);
+        _setRole(_configRole, _ROLE_CONFIG, admin_, true);
+        _setRole(_keeperRole, _ROLE_KEEPER, admin_, true);
+        _setRole(_pauserRole, _ROLE_PAUSER, admin_, true);
     }
 
     modifier whenNotPaused() {
@@ -148,12 +157,50 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
         _;
     }
 
-    function setPaused(bool value) external onlyRole(PAUSER_ROLE) {
+    modifier onlyAdmin() {
+        if (msg.sender != admin) revert Unauthorized();
+        _;
+    }
+
+    modifier onlyConfig() {
+        if (!_hasRole(_configRole, msg.sender)) revert Unauthorized();
+        _;
+    }
+
+    modifier onlyKeeper() {
+        if (!_hasRole(_keeperRole, msg.sender)) revert Unauthorized();
+        _;
+    }
+
+    modifier onlyPauser() {
+        if (!_hasRole(_pauserRole, msg.sender)) revert Unauthorized();
+        _;
+    }
+
+    function transferAdmin(address newAdmin) external onlyAdmin {
+        if (newAdmin == address(0)) revert Unauthorized();
+        emit AdminTransferred(admin, newAdmin);
+        admin = newAdmin;
+    }
+
+    function setConfigRole(address account, bool enabled) external onlyAdmin {
+        _setRole(_configRole, _ROLE_CONFIG, account, enabled);
+    }
+
+    function setKeeperRole(address account, bool enabled) external onlyAdmin {
+        _setRole(_keeperRole, _ROLE_KEEPER, account, enabled);
+    }
+
+    function setPauserRole(address account, bool enabled) external onlyAdmin {
+        _setRole(_pauserRole, _ROLE_PAUSER, account, enabled);
+    }
+
+    function setPaused(bool value) external onlyPauser {
         paused = value;
         emit Paused(msg.sender, value);
     }
 
-    function configurePool(PoolKey calldata key, ConfigurePoolParams calldata params) external onlyRole(CONFIG_ROLE) {
+    function configurePool(PoolKey calldata key, ConfigurePoolParams calldata params) external onlyConfig {
         PoolId poolId = key.toId();
         PoolConfig storage config = poolConfigs[poolId];
 
@@ -162,7 +209,7 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
         if (params.baseFee != 0) config.baseFee = params.baseFee;
         if (params.maxFee != 0) config.maxFee = params.maxFee;
         if (params.minFee != 0) config.minFee = params.minFee;
-        if (params.reserveCutBps != 0) config.reserveCutBps = _clampReserveCut(params.reserveCutBps);
+        if (params.reserveCutBps != 0) config.reserveCutBps = PegGuardReserveLib.clampReserveCut(params.reserveCutBps);
         if (params.volatilityThresholdBps != 0) config.volatilityThresholdBps = params.volatilityThresholdBps;
         if (params.depegThresholdBps != 0) config.depegThresholdBps = params.depegThresholdBps;
 
@@ -180,13 +227,13 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
         emit PoolConfigured(poolId, config.priceFeedId0, config.priceFeedId1, config.baseFee);
     }
 
-    function setPoolMode(PoolKey calldata key, PoolMode mode) external onlyRole(KEEPER_ROLE) whenNotPaused {
+    function setPoolMode(PoolKey calldata key, PoolMode mode) external onlyKeeper whenNotPaused {
         PoolId poolId = key.toId();
         poolStates[poolId].mode = mode;
         emit PoolModeUpdated(poolId, mode);
     }
 
-    function setJITWindow(PoolKey calldata key, bool active) external onlyRole(KEEPER_ROLE) whenNotPaused {
+    function setJITWindow(PoolKey calldata key, bool active) external onlyKeeper whenNotPaused {
         PoolId poolId = key.toId();
         PoolState storage state = poolStates[poolId];
         if (state.jitLiquidityActive == active && _jitActiveFlags[poolId] == active) return;
@@ -195,7 +242,7 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
         emit JITWindowUpdated(poolId, active);
     }
 
-    function reportReserveDelta(PoolKey calldata key, int256 delta) external onlyRole(KEEPER_ROLE) whenNotPaused {
+    function reportReserveDelta(PoolKey calldata key, int256 delta) external onlyKeeper whenNotPaused {
         if (delta == 0) revert InvalidAmount();
         PoolId poolId = key.toId();
         PoolState storage state = poolStates[poolId];
@@ -211,28 +258,20 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
         emit ReserveSynced(poolId, state.reserveBalance);
     }
 
-    function fundReserve(PoolKey calldata key, uint256 amount) external onlyRole(ADMIN_ROLE) whenNotPaused {
+    function fundReserve(PoolKey calldata key, uint256 amount) external onlyAdmin whenNotPaused {
         _transferReserveIn(amount);
         PoolId poolId = key.toId();
         poolStates[poolId].reserveBalance += amount;
         emit ReserveSynced(poolId, poolStates[poolId].reserveBalance);
     }
 
-    function withdrawReserve(PoolKey calldata key, address recipient, uint256 amount)
-        external
-        onlyRole(ADMIN_ROLE)
-        whenNotPaused
-    {
+    function withdrawReserve(PoolKey calldata key, address recipient, uint256 amount) external onlyAdmin whenNotPaused {
         _decreaseReserve(key.toId(), amount);
         IERC20(reserveToken).transfer(recipient, amount);
         emit ReserveSynced(key.toId(), poolStates[key.toId()].reserveBalance);
     }
 
-    function issueRebate(PoolKey calldata key, address trader, uint256 amount)
-        external
-        onlyRole(KEEPER_ROLE)
-        whenNotPaused
-    {
+    function issueRebate(PoolKey calldata key, address trader, uint256 amount) external onlyKeeper whenNotPaused {
         _decreaseReserve(key.toId(), amount);
         PoolState storage state = poolStates[key.toId()];
         state.totalRebates += amount;
@@ -250,21 +289,7 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
         returns (uint256 rebateAmount)
     {
         PoolState storage state = poolStates[poolId];
-        if (state.reserveBalance == 0) return 0;
-
-        // Sentinel's rebate formula: MIN_REBATE_BPS + (depeg reduction * REBATE_SCALE_BPS)
-        uint256 rebateBps = MIN_REBATE_BPS;
-        if (depegReductionBps > 0) {
-            rebateBps += (depegReductionBps / 10) * REBATE_SCALE_BPS;
-        }
-
-        // Calculate rebate amount from reserve balance
-        rebateAmount = (state.reserveBalance * rebateBps) / 10_000;
-
-        // Cap rebate at available reserve
-        if (rebateAmount > state.reserveBalance) {
-            rebateAmount = state.reserveBalance;
-        }
+        return PegGuardReserveLib.calculateRebate(state.reserveBalance, depegReductionBps);
     }
 
     function getPoolSnapshot(PoolKey calldata key)
@@ -279,7 +304,7 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
         state = storedState;
     }
 
-    function setTargetRange(PoolKey calldata key, int24 tickLower, int24 tickUpper) external onlyRole(CONFIG_ROLE) {
+    function setTargetRange(PoolKey calldata key, int24 tickLower, int24 tickUpper) external onlyConfig {
         if (tickLower >= tickUpper) revert InvalidTargetRange();
         PoolId poolId = key.toId();
         PoolConfig storage config = poolConfigs[poolId];
@@ -290,7 +315,7 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
         emit TargetRange(poolId, tickLower, tickUpper);
     }
 
-    function clearTargetRange(PoolKey calldata key) external onlyRole(CONFIG_ROLE) {
+    function clearTargetRange(PoolKey calldata key) external onlyConfig {
         PoolId poolId = key.toId();
         PoolConfig storage config = poolConfigs[poolId];
         config.targetRangeSet = false;
@@ -300,7 +325,7 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
         emit TargetRange(poolId, 0, 0);
     }
 
-    function setLiquidityPolicy(PoolKey calldata key, bool enforceAllowlist) external onlyRole(CONFIG_ROLE) {
+    function setLiquidityPolicy(PoolKey calldata key, bool enforceAllowlist) external onlyConfig {
         PoolId poolId = key.toId();
         poolConfigs[poolId].enforceAllowlist = enforceAllowlist;
         poolStates[poolId].enforceAllowlist = enforceAllowlist;
@@ -308,10 +333,7 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
         emit LiquidityPolicyUpdated(poolId, enforceAllowlist);
     }
 
-    function updateLiquidityAllowlist(PoolKey calldata key, address account, bool allowed)
-        external
-        onlyRole(CONFIG_ROLE)
-    {
+    function updateLiquidityAllowlist(PoolKey calldata key, address account, bool allowed) external onlyConfig {
         PoolId poolId = key.toId();
         poolAllowlist[poolId][account] = allowed;
         emit LiquidityAllowlistUpdated(poolId, account, allowed);
@@ -347,7 +369,7 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
         ctx.baseFee = config.baseFee == 0 ? DEFAULT_BASE_FEE : config.baseFee;
         ctx.maxFee = config.maxFee == 0 ? DEFAULT_MAX_FEE : config.maxFee;
         ctx.minFee = config.minFee == 0 ? DEFAULT_MIN_FEE : config.minFee;
-        ctx.feeFloor = ctx.baseFee + _modePremium(state.mode);
+        ctx.feeFloor = ctx.baseFee + PegGuardFeeLib.modePremium(uint8(state.mode));
         if (state.jitLiquidityActive) ctx.feeFloor += JIT_ACTIVE_PREMIUM;
         if (ctx.feeFloor > ctx.maxFee) ctx.feeFloor = ctx.maxFee;
         ctx.reserveCutBps = config.reserveCutBps == 0 ? MIN_RESERVE_CUT_BPS : config.reserveCutBps;
@@ -396,7 +418,7 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
             return ctx.feeFloor;
         }
 
-        uint256 depegBps = _computeDepegBps(price0, price1);
+        uint256 depegBps = PegGuardFeeLib.computeDepegBps(price0, price1);
         state.lastDepegBps = depegBps;
 
         if (depegBps <= ctx.depegThresholdBps) {
@@ -405,12 +427,24 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
         }
 
         bool worsensDepeg = (price0 < price1 && zeroForOne) || (price0 > price1 && !zeroForOne);
-        uint24 dynamicFee;
+        PegGuardFeeHelper.FeeComputation memory feeInput = PegGuardFeeHelper.FeeComputation({
+            feeFloor: ctx.feeFloor,
+            maxFee: ctx.maxFee,
+            minFee: ctx.minFee,
+            reserveCutBps: ctx.reserveCutBps,
+            depegBps: depegBps,
+            worsensDepeg: worsensDepeg
+        });
+        PegGuardFeeHelper.FeeResult memory feeOutput = feeHelper.compute(feeInput);
+        uint24 dynamicFee = feeOutput.dynamicFee;
 
-        if (worsensDepeg) {
-            dynamicFee = _applyPenalty(poolId, state, ctx, depegBps, zeroForOne);
+        if (feeOutput.isPenalty) {
+            state.totalPenaltyFees += feeOutput.feeDelta;
+            emit DepegPenaltyApplied(poolId, zeroForOne, dynamicFee, feeOutput.reserveAmount);
+            emit FeeOverrideApplied(poolId, dynamicFee, true);
         } else {
-            dynamicFee = _applyRebate(poolId, state, ctx, depegBps);
+            state.totalRebates += feeOutput.feeDelta;
+            emit FeeOverrideApplied(poolId, dynamicFee, false);
         }
 
         state.lastOverrideFee = dynamicFee;
@@ -460,7 +494,7 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
             jitActive,
             liquidityProvider
         );
-        _enforceAddPolicy(poolId, liquidityProvider, mustBeAllowlisted);
+        PegGuardLiquidityLib.enforceAddPolicy(poolAllowlist[poolId][liquidityProvider], mustBeAllowlisted);
 
         // Enforce target range when JIT is active (regardless of allowlist state)
         // Also check config.targetRangeSet to ensure range is configured
@@ -483,79 +517,9 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
         // During JIT crisis mode, only allowlisted providers can remove liquidity
         if (state.jitLiquidityActive) {
             address liquidityProvider = sender;
-            _enforceAddPolicy(poolId, liquidityProvider, true);
+            PegGuardLiquidityLib.enforceAddPolicy(poolAllowlist[poolId][liquidityProvider], true);
         }
         return BaseHook.beforeRemoveLiquidity.selector;
-    }
-
-    function _computeDepegBps(int64 price0, int64 price1) internal pure returns (uint256) {
-        int256 diff = int256(price0) - int256(price1);
-        if (diff < 0) diff = -diff;
-        int256 denomSigned = int256(price1);
-        uint256 denom = uint256(denomSigned >= 0 ? denomSigned : -denomSigned);
-        if (denom == 0) denom = 1;
-        return (uint256(diff) * 10_000) / denom;
-    }
-
-    function _modePremium(PoolMode mode) internal pure returns (uint24) {
-        if (mode == PoolMode.Alert) return ALERT_FEE_PREMIUM;
-        if (mode == PoolMode.Crisis) return CRISIS_FEE_PREMIUM;
-        return 0;
-    }
-
-    function _applyPenalty(
-        PoolId poolId,
-        PoolState storage state,
-        FeeContext memory ctx,
-        uint256 depegBps,
-        bool zeroForOne
-    ) internal returns (uint24 dynamicFee) {
-        uint24 penalty = uint24((depegBps / 10) * 100);
-        dynamicFee = ctx.feeFloor + penalty;
-        if (dynamicFee > ctx.maxFee) dynamicFee = ctx.maxFee;
-
-        uint24 penaltyAmount = dynamicFee > ctx.feeFloor ? dynamicFee - ctx.feeFloor : 0;
-        state.totalPenaltyFees += penaltyAmount;
-
-        // Calculate reserve amount based on penalty and reserve cut
-        // Note: In Uniswap v4, fees are collected by the pool and distributed to LPs.
-        // The reserve cut represents the portion that should be allocated to the reserve.
-        // Actual sweeping would need to happen via a separate mechanism (keeper calling sweepPenaltyFees).
-        // For now, we track the amount and emit it in the event.
-        uint256 reserveAmount = 0; // Will be calculated when fees are actually swept
-        if (penaltyAmount > 0 && reserveToken != address(0)) {
-            // The reserve amount would be calculated from actual fee collection
-            // This is a placeholder - actual implementation would need fee accounting
-            reserveAmount = (uint256(penaltyAmount) * ctx.reserveCutBps) / 10_000;
-        }
-
-        emit DepegPenaltyApplied(poolId, zeroForOne, dynamicFee, reserveAmount);
-        emit FeeOverrideApplied(poolId, dynamicFee, true);
-    }
-
-    function _applyRebate(PoolId poolId, PoolState storage state, FeeContext memory ctx, uint256 depegBps)
-        internal
-        returns (uint24 dynamicFee)
-    {
-        uint24 rebate = uint24((depegBps / 20) * 50);
-        if (rebate >= ctx.feeFloor || ctx.feeFloor - rebate < ctx.minFee) {
-            dynamicFee = ctx.minFee;
-        } else {
-            dynamicFee = ctx.feeFloor - rebate;
-        }
-        if (dynamicFee < ctx.minFee) dynamicFee = ctx.minFee;
-
-        uint24 rebateAmount = ctx.feeFloor > dynamicFee ? ctx.feeFloor - dynamicFee : 0;
-        // Track rebate fee reduction (actual token rebate is issued separately via issueRebate)
-        state.totalRebates += rebateAmount;
-
-        emit FeeOverrideApplied(poolId, dynamicFee, false);
-    }
-
-    function _enforceAddPolicy(PoolId poolId, address sender, bool mustBeAllowlisted) internal view {
-        if (!mustBeAllowlisted) return;
-        if (poolAllowlist[poolId][sender]) return;
-        revert UnauthorizedLiquidityProvider();
     }
 
     function _transferReserveIn(uint256 amount) internal {
@@ -572,9 +536,14 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
         state.reserveBalance -= amount;
     }
 
-    function _clampReserveCut(uint256 cutBps) internal pure returns (uint256) {
-        if (cutBps < MIN_RESERVE_CUT_BPS) return MIN_RESERVE_CUT_BPS;
-        if (cutBps > MAX_RESERVE_CUT_BPS) return MAX_RESERVE_CUT_BPS;
-        return cutBps;
+    function _setRole(mapping(address => bool) storage roleMap, bytes32 roleId, address account, bool enabled)
+        internal
+    {
+        roleMap[account] = enabled;
+        emit RoleUpdated(roleId, account, enabled);
+    }
+
+    function _hasRole(mapping(address => bool) storage roleMap, address account) internal view returns (bool) {
+        return account == admin || roleMap[account];
     }
 }

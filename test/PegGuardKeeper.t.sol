@@ -102,7 +102,7 @@ contract PegGuardKeeperTest is BaseTest {
         hook.updateLiquidityAllowlist(poolKey, address(positionManager), true);
 
         keeper = new PegGuardKeeper(address(hook), address(this));
-        hook.grantRole(hook.KEEPER_ROLE(), address(keeper));
+        hook.setKeeperRole(address(keeper), true);
 
         PegGuardKeeper.KeeperConfig memory cfg = PegGuardKeeper.KeeperConfig({
             alertBps: 30, crisisBps: 70, jitActivationBps: 70, modeCooldown: 0, jitCooldown: 0
