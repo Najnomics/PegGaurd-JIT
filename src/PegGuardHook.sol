@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IPoolManager, SwapParams, ModifyLiquidityParams} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
@@ -20,6 +21,10 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
 
     uint256 public constant VOLATILITY_THRESHOLD_BPS = 100; // 1%
     uint256 public constant DEPEG_THRESHOLD_BPS = 50; // 0.5%
+    uint256 public constant MIN_RESERVE_CUT_BPS = 2000; // 20%
+    uint256 public constant MAX_RESERVE_CUT_BPS = 5000; // 50%
+    uint256 public constant MIN_REBATE_BPS = 500; // 0.05%
+    uint256 public constant REBATE_SCALE_BPS = 10; // 0.001% per 10 bps reduction
 
     uint24 public constant DEFAULT_BASE_FEE = 3000; // 0.3%
     uint24 public constant DEFAULT_MAX_FEE = 50_000; // 5%
@@ -40,6 +45,9 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
         uint24 baseFee;
         uint24 maxFee;
         uint24 minFee;
+        uint256 reserveCutBps;
+        uint256 volatilityThresholdBps;
+        uint256 depegThresholdBps;
         int24 targetTickLower;
         int24 targetTickUpper;
         bool targetRangeSet;
@@ -63,6 +71,9 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
         uint24 baseFee;
         uint24 maxFee;
         uint24 minFee;
+        uint256 reserveCutBps;
+        uint256 volatilityThresholdBps;
+        uint256 depegThresholdBps;
     }
 
     struct FeeContext {
@@ -70,6 +81,9 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
         uint24 maxFee;
         uint24 minFee;
         uint24 feeFloor;
+        uint256 reserveCutBps;
+        uint256 volatilityThresholdBps;
+        uint256 depegThresholdBps;
     }
 
     mapping(PoolId => PoolConfig) public poolConfigs;
@@ -86,6 +100,7 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
     error UnauthorizedLiquidityProvider();
     error TargetRangeViolation();
     error InvalidTargetRange();
+    error ReserveTokenNotSet();
 
     event PoolConfigured(PoolId indexed poolId, bytes32 feed0, bytes32 feed1, uint24 baseFee);
     event PoolModeUpdated(PoolId indexed poolId, PoolMode mode);
@@ -96,6 +111,9 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
     event TargetRangeUpdated(PoolId indexed poolId, int24 tickLower, int24 tickUpper);
     event LiquidityPolicyUpdated(PoolId indexed poolId, bool enforceAllowlist);
     event LiquidityAllowlistUpdated(PoolId indexed poolId, address indexed account, bool allowed);
+    event TargetRange(PoolId indexed poolId, int24 tickLower, int24 tickUpper);
+    event DepegPenaltyApplied(PoolId indexed poolId, bool zeroForOne, uint24 fee, uint256 reserveCutBps);
+    event DepegRebateIssued(PoolId indexed poolId, address trader, uint256 amount);
 
     mapping(PoolId => mapping(address => bool)) private poolAllowlist;
 
@@ -131,8 +149,16 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
         if (params.baseFee != 0) config.baseFee = params.baseFee;
         if (params.maxFee != 0) config.maxFee = params.maxFee;
         if (params.minFee != 0) config.minFee = params.minFee;
+        if (params.reserveCutBps != 0) config.reserveCutBps = _clampReserveCut(params.reserveCutBps);
+        if (params.volatilityThresholdBps != 0) config.volatilityThresholdBps = params.volatilityThresholdBps;
+        if (params.depegThresholdBps != 0) config.depegThresholdBps = params.depegThresholdBps;
 
         if (config.baseFee == 0) config.baseFee = DEFAULT_BASE_FEE;
+        if (config.maxFee == 0) config.maxFee = DEFAULT_MAX_FEE;
+        if (config.minFee == 0) config.minFee = DEFAULT_MIN_FEE;
+        if (config.reserveCutBps == 0) config.reserveCutBps = MIN_RESERVE_CUT_BPS;
+        if (config.volatilityThresholdBps == 0) config.volatilityThresholdBps = VOLATILITY_THRESHOLD_BPS;
+        if (config.depegThresholdBps == 0) config.depegThresholdBps = DEPEG_THRESHOLD_BPS;
 
         if (config.priceFeedId0 == bytes32(0) || config.priceFeedId1 == bytes32(0)) {
             revert MissingPriceFeeds();
@@ -171,6 +197,35 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
         emit ReserveSynced(poolId, state.reserveBalance);
     }
 
+    function fundReserve(PoolKey calldata key, uint256 amount) external onlyRole(ADMIN_ROLE) whenNotPaused {
+        _transferReserveIn(amount);
+        PoolId poolId = key.toId();
+        poolStates[poolId].reserveBalance += amount;
+        emit ReserveSynced(poolId, poolStates[poolId].reserveBalance);
+    }
+
+    function withdrawReserve(PoolKey calldata key, address recipient, uint256 amount)
+        external
+        onlyRole(ADMIN_ROLE)
+        whenNotPaused
+    {
+        _decreaseReserve(key.toId(), amount);
+        IERC20(reserveToken).transfer(recipient, amount);
+        emit ReserveSynced(key.toId(), poolStates[key.toId()].reserveBalance);
+    }
+
+    function issueRebate(PoolKey calldata key, address trader, uint256 amount)
+        external
+        onlyRole(KEEPER_ROLE)
+        whenNotPaused
+    {
+        _decreaseReserve(key.toId(), amount);
+        PoolState storage state = poolStates[key.toId()];
+        state.totalRebates += amount;
+        IERC20(reserveToken).transfer(trader, amount);
+        emit DepegRebateIssued(key.toId(), trader, amount);
+    }
+
     function getPoolSnapshot(PoolKey calldata key)
         external
         view
@@ -189,6 +244,7 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
         config.targetTickUpper = tickUpper;
         config.targetRangeSet = true;
         emit TargetRangeUpdated(poolId, tickLower, tickUpper);
+        emit TargetRange(poolId, tickLower, tickUpper);
     }
 
     function clearTargetRange(PoolKey calldata key) external onlyRole(CONFIG_ROLE) {
@@ -198,6 +254,7 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
         config.targetTickLower = 0;
         config.targetTickUpper = 0;
         emit TargetRangeUpdated(poolId, 0, 0);
+        emit TargetRange(poolId, 0, 0);
     }
 
     function setLiquidityPolicy(PoolKey calldata key, bool enforceAllowlist) external onlyRole(CONFIG_ROLE) {
@@ -239,6 +296,7 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
         PoolId poolId = key.toId();
         PoolConfig storage config = poolConfigs[poolId];
         PoolState storage state = poolStates[poolId];
+        bool zeroForOne = params.zeroForOne;
 
         FeeContext memory ctx;
         ctx.baseFee = config.baseFee == 0 ? DEFAULT_BASE_FEE : config.baseFee;
@@ -247,6 +305,10 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
         ctx.feeFloor = ctx.baseFee + _modePremium(state.mode);
         if (state.jitLiquidityActive) ctx.feeFloor += JIT_ACTIVE_PREMIUM;
         if (ctx.feeFloor > ctx.maxFee) ctx.feeFloor = ctx.maxFee;
+        ctx.reserveCutBps = config.reserveCutBps == 0 ? MIN_RESERVE_CUT_BPS : config.reserveCutBps;
+        ctx.volatilityThresholdBps =
+            config.volatilityThresholdBps == 0 ? VOLATILITY_THRESHOLD_BPS : config.volatilityThresholdBps;
+        ctx.depegThresholdBps = config.depegThresholdBps == 0 ? DEPEG_THRESHOLD_BPS : config.depegThresholdBps;
 
         if (paused || config.priceFeedId0 == bytes32(0) || config.priceFeedId1 == bytes32(0)) {
             state.lastOverrideFee = ctx.feeFloor;
@@ -260,7 +322,7 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
             (pythAdapter.computeConfRatioBps(price0, conf0) + pythAdapter.computeConfRatioBps(price1, conf1)) / 2;
         state.lastConfidenceBps = confRatioBps;
 
-        if (confRatioBps > VOLATILITY_THRESHOLD_BPS) {
+        if (confRatioBps > ctx.volatilityThresholdBps) {
             state.lastOverrideFee = ctx.feeFloor;
             return ctx.feeFloor;
         }
@@ -268,30 +330,18 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
         uint256 depegBps = _computeDepegBps(price0, price1);
         state.lastDepegBps = depegBps;
 
-        if (depegBps <= DEPEG_THRESHOLD_BPS) {
+        if (depegBps <= ctx.depegThresholdBps) {
             state.lastOverrideFee = ctx.feeFloor;
             return ctx.feeFloor;
         }
 
-        bool worsensDepeg = (price0 < price1 && params.zeroForOne) || (price0 > price1 && !params.zeroForOne);
+        bool worsensDepeg = (price0 < price1 && zeroForOne) || (price0 > price1 && !zeroForOne);
         uint24 dynamicFee;
 
         if (worsensDepeg) {
-            uint24 penalty = uint24((depegBps / 10) * 100);
-            dynamicFee = ctx.feeFloor + penalty;
-            if (dynamicFee > ctx.maxFee) dynamicFee = ctx.maxFee;
-            state.totalPenaltyFees += dynamicFee > ctx.feeFloor ? dynamicFee - ctx.feeFloor : 0;
-            emit FeeOverrideApplied(poolId, dynamicFee, true);
+            dynamicFee = _applyPenalty(poolId, state, ctx, depegBps, zeroForOne);
         } else {
-            uint24 rebate = uint24((depegBps / 20) * 50);
-            if (rebate >= ctx.feeFloor || ctx.feeFloor - rebate < ctx.minFee) {
-                dynamicFee = ctx.minFee;
-            } else {
-                dynamicFee = ctx.feeFloor - rebate;
-            }
-            if (dynamicFee < ctx.minFee) dynamicFee = ctx.minFee;
-            state.totalRebates += ctx.feeFloor > dynamicFee ? ctx.feeFloor - dynamicFee : 0;
-            emit FeeOverrideApplied(poolId, dynamicFee, false);
+            dynamicFee = _applyRebate(poolId, state, ctx, depegBps);
         }
 
         state.lastOverrideFee = dynamicFee;
@@ -352,9 +402,59 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
         return 0;
     }
 
+    function _applyPenalty(
+        PoolId poolId,
+        PoolState storage state,
+        FeeContext memory ctx,
+        uint256 depegBps,
+        bool zeroForOne
+    ) internal returns (uint24 dynamicFee) {
+        uint24 penalty = uint24((depegBps / 10) * 100);
+        dynamicFee = ctx.feeFloor + penalty;
+        if (dynamicFee > ctx.maxFee) dynamicFee = ctx.maxFee;
+        state.totalPenaltyFees += dynamicFee > ctx.feeFloor ? dynamicFee - ctx.feeFloor : 0;
+        emit DepegPenaltyApplied(poolId, zeroForOne, dynamicFee, ctx.reserveCutBps);
+        emit FeeOverrideApplied(poolId, dynamicFee, true);
+    }
+
+    function _applyRebate(PoolId poolId, PoolState storage state, FeeContext memory ctx, uint256 depegBps)
+        internal
+        returns (uint24 dynamicFee)
+    {
+        uint24 rebate = uint24((depegBps / 20) * 50);
+        if (rebate >= ctx.feeFloor || ctx.feeFloor - rebate < ctx.minFee) {
+            dynamicFee = ctx.minFee;
+        } else {
+            dynamicFee = ctx.feeFloor - rebate;
+        }
+        if (dynamicFee < ctx.minFee) dynamicFee = ctx.minFee;
+        state.totalRebates += ctx.feeFloor > dynamicFee ? ctx.feeFloor - dynamicFee : 0;
+        emit FeeOverrideApplied(poolId, dynamicFee, false);
+    }
+
     function _enforceAddPolicy(PoolId poolId, address sender, bool mustBeAllowlisted) internal view {
         if (!mustBeAllowlisted) return;
         if (poolAllowlist[poolId][sender] || hasRole(KEEPER_ROLE, sender)) return;
         revert UnauthorizedLiquidityProvider();
+    }
+
+    function _transferReserveIn(uint256 amount) internal {
+        if (reserveToken == address(0)) revert ReserveTokenNotSet();
+        if (amount == 0) revert InvalidAmount();
+        IERC20(reserveToken).transferFrom(msg.sender, address(this), amount);
+    }
+
+    function _decreaseReserve(PoolId poolId, uint256 amount) internal {
+        if (reserveToken == address(0)) revert ReserveTokenNotSet();
+        if (amount == 0) revert InvalidAmount();
+        PoolState storage state = poolStates[poolId];
+        if (state.reserveBalance < amount) revert InsufficientReserve();
+        state.reserveBalance -= amount;
+    }
+
+    function _clampReserveCut(uint256 cutBps) internal pure returns (uint256) {
+        if (cutBps < MIN_RESERVE_CUT_BPS) return MIN_RESERVE_CUT_BPS;
+        if (cutBps > MAX_RESERVE_CUT_BPS) return MAX_RESERVE_CUT_BPS;
+        return cutBps;
     }
 }

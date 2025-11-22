@@ -20,6 +20,7 @@ import {BaseTest} from "./utils/BaseTest.sol";
 import {PegGuardHook} from "../src/PegGuardHook.sol";
 import {PythOracleAdapter} from "../src/oracle/PythOracleAdapter.sol";
 import {MockPyth} from "./mocks/MockPyth.sol";
+import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 
 contract PegGuardHookTest is BaseTest {
     using EasyPosm for IPositionManager;
@@ -51,7 +52,8 @@ contract PegGuardHookTest is BaseTest {
         adapter = new PythOracleAdapter(address(mockPyth));
 
         address flags = address(uint160(Hooks.AFTER_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_FLAG) ^ (0x4444 << 144));
-        bytes memory constructorArgs = abi.encode(poolManager, address(adapter), address(0), address(this));
+        bytes memory constructorArgs =
+            abi.encode(poolManager, address(adapter), Currency.unwrap(currency0), address(this));
         deployCodeTo("PegGuardHook.sol:PegGuardHook", constructorArgs, flags);
         hook = PegGuardHook(flags);
 
@@ -84,10 +86,18 @@ contract PegGuardHookTest is BaseTest {
         );
 
         PegGuardHook.ConfigurePoolParams memory params = PegGuardHook.ConfigurePoolParams({
-            priceFeedId0: FEED_USDC, priceFeedId1: FEED_USDT, baseFee: 3000, maxFee: 50_000, minFee: 500
+            priceFeedId0: FEED_USDC,
+            priceFeedId1: FEED_USDT,
+            baseFee: 3000,
+            maxFee: 50_000,
+            minFee: 500,
+            reserveCutBps: 0,
+            volatilityThresholdBps: 0,
+            depegThresholdBps: 0
         });
 
         hook.configurePool(poolKey, params);
+        hook.grantRole(hook.KEEPER_ROLE(), address(this));
 
         _setPrices(1_000_000_00, 1_000_000_00, 100);
     }
@@ -118,6 +128,31 @@ contract PegGuardHookTest is BaseTest {
         _swap(true);
         (, PegGuardHook.PoolState memory state) = hook.getPoolSnapshot(poolKey);
         assertEq(state.lastOverrideFee, 3000 + hook.ALERT_FEE_PREMIUM() + hook.JIT_ACTIVE_PREMIUM());
+    }
+
+    function testReserveLifecycle() public {
+        MockERC20 reserveToken = MockERC20(Currency.unwrap(currency0));
+        uint256 amount = 1e18;
+        reserveToken.approve(address(hook), amount);
+        hook.fundReserve(poolKey, amount);
+        (, PegGuardHook.PoolState memory state) = hook.getPoolSnapshot(poolKey);
+        assertEq(state.reserveBalance, amount);
+
+        hook.withdrawReserve(poolKey, address(this), amount / 2);
+        (, state) = hook.getPoolSnapshot(poolKey);
+        assertEq(state.reserveBalance, amount / 2);
+    }
+
+    function testIssueRebate() public {
+        MockERC20 reserveToken = MockERC20(Currency.unwrap(currency0));
+        uint256 amount = 2e18;
+        reserveToken.approve(address(hook), amount);
+        hook.fundReserve(poolKey, amount);
+        hook.issueRebate(poolKey, address(0xBEEF), 1e18);
+        (, PegGuardHook.PoolState memory state) = hook.getPoolSnapshot(poolKey);
+        assertEq(state.reserveBalance, amount - 1e18);
+        assertEq(state.totalRebates, 1e18);
+        assertEq(reserveToken.balanceOf(address(0xBEEF)), 1e18);
     }
 
     function testCannotAddLiquidityWhenAllowlistEnforced() public {

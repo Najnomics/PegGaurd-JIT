@@ -40,7 +40,10 @@ contract ConfigurePegGuardScript is Script {
                 priceFeedId1: vm.envBytes32("PRICE_FEED_ID1"),
                 baseFee: uint24(vm.envUint("POOL_BASE_FEE")),
                 maxFee: uint24(vm.envUint("POOL_MAX_FEE")),
-                minFee: uint24(vm.envUint("POOL_MIN_FEE"))
+                minFee: uint24(vm.envUint("POOL_MIN_FEE")),
+                reserveCutBps: vm.envOr("POOL_RESERVE_CUT_BPS", uint256(0)),
+                volatilityThresholdBps: vm.envOr("POOL_VOLATILITY_THRESHOLD_BPS", uint256(0)),
+                depegThresholdBps: vm.envOr("POOL_DEPEG_THRESHOLD_BPS", uint256(0))
             })
         );
 

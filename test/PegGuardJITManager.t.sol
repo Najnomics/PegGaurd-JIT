@@ -82,7 +82,14 @@ contract PegGuardJITManagerTest is BaseTest {
         );
 
         PegGuardHook.ConfigurePoolParams memory params = PegGuardHook.ConfigurePoolParams({
-            priceFeedId0: bytes32("USDC"), priceFeedId1: bytes32("DAI"), baseFee: 3000, maxFee: 50_000, minFee: 500
+            priceFeedId0: bytes32("USDC"),
+            priceFeedId1: bytes32("DAI"),
+            baseFee: 3000,
+            maxFee: 50_000,
+            minFee: 500,
+            reserveCutBps: 0,
+            volatilityThresholdBps: 0,
+            depegThresholdBps: 0
         });
         hook.configurePool(poolKey, params);
 

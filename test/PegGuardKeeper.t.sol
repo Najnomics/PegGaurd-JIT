@@ -50,7 +50,8 @@ contract PegGuardKeeperTest is BaseTest {
         adapter = new PythOracleAdapter(address(mockPyth));
 
         address flags = address(uint160(Hooks.AFTER_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_FLAG) ^ (0x5555 << 144));
-        bytes memory constructorArgs = abi.encode(poolManager, address(adapter), address(0), address(this));
+        bytes memory constructorArgs =
+            abi.encode(poolManager, address(adapter), Currency.unwrap(currency0), address(this));
         deployCodeTo("PegGuardHook.sol:PegGuardHook", constructorArgs, flags);
         hook = PegGuardHook(flags);
 
@@ -82,7 +83,14 @@ contract PegGuardKeeperTest is BaseTest {
         );
 
         PegGuardHook.ConfigurePoolParams memory params = PegGuardHook.ConfigurePoolParams({
-            priceFeedId0: FEED_USDC, priceFeedId1: FEED_USDT, baseFee: 3000, maxFee: 50_000, minFee: 500
+            priceFeedId0: FEED_USDC,
+            priceFeedId1: FEED_USDT,
+            baseFee: 3000,
+            maxFee: 50_000,
+            minFee: 500,
+            reserveCutBps: 0,
+            volatilityThresholdBps: 0,
+            depegThresholdBps: 0
         });
         hook.configurePool(poolKey, params);
         hook.updateLiquidityAllowlist(poolKey, address(this), true);
