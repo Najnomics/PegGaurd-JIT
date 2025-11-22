@@ -127,4 +127,14 @@ contract PegGuardJITManagerTest is BaseTest {
         assertGe(IERC20(token0).balanceOf(address(this)), funderToken0Before - 1);
         assertGe(IERC20(token1).balanceOf(address(this)), funderToken1Before - 1);
     }
+
+    function testFlashBurstRoundTrip() public {
+        MockERC20(token0).transfer(address(jitManager), 20e18);
+        MockERC20(token1).transfer(address(jitManager), 20e18);
+
+        (,, uint256 amount0Out,) = jitManager.flashBurst(poolKey, 5e18, 10e18, 10e18, address(0), bytes(""));
+
+        assertGt(amount0Out, 0);
+        assertGt(IERC20(token0).balanceOf(address(this)), 0);
+    }
 }

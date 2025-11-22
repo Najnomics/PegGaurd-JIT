@@ -12,6 +12,7 @@ PegGuard JIT merges two blueprints:
 | `PegGuardHook` | Dynamic-fee hook that protects the peg | BaseOverrideFee logic from Sentinel, hook permissioning & liquidity controls from the v4 template |
 | `PegGuardKeeper` | On-chain sentinel/coordinator | Sentinel thresholds + automation hooks |
 | `PegGuardJITManager` | Burst-liquidity orchestrator | Executes JIT mints similar to the Uniswap vault scripts, streams reserve share back to PegGuard |
+| `PegGuardFlashBorrower` | Aave V3 flash receiver | Initiates single-block bursts with flash liquidity, calling `PegGuardJITManager.flashBurst` |
 | `PythOracleAdapter` | Normalizes Pyth feeds | Shared utility between hook/keeper |
 
 ### PegGuardHook
@@ -41,8 +42,8 @@ PegGuard JIT merges two blueprints:
 ## Roadmap Summary
 
 1. **Reserve Mechanics (this PR)** – parity with Sentinel for reserve flows/events.
-2. **Flash-Loan JIT** – use Aave/Morpho to fund `PegGuardJITManager`.
-3. **Keeper/Bot Expansion** – multi-pool configs, alerting, retry logic.
+2. **Flash-Loan JIT** — (in progress) hook in Aave flash loans + `flashBurst` flows for single-block depth, followed by multi-block credit lines.
+3. **Keeper/Bot Expansion** — multi-pool configs, alerting, retry logic.
 4. **Deployment Tooling** – scripts mirroring the Uniswap template, CLI harnesses.
 5. **Integration Tests & Simulations** – Universal Router swaps + fork tests.
 6. **Docs & Ops** – runbooks, alert layouts, env templates.

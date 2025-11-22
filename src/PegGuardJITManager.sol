@@ -13,6 +13,7 @@ import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionMa
 import {Actions} from "@uniswap/v4-periphery/src/libraries/Actions.sol";
 
 import {PegGuardHook} from "./PegGuardHook.sol";
+import {IBurstExecutor} from "./interfaces/IBurstExecutor.sol";
 
 /// @notice Contract that automates burst-liquidity (JIT) operations around PegGuard pools.
 /// It is intentionally opinionated and mirrors the orchestration logic from the JIT reference repo.
@@ -51,6 +52,9 @@ contract PegGuardJITManager is AccessControl {
     event BurstSettled(
         PoolId indexed poolId, uint256 tokenId, uint256 amount0Returned, uint256 amount1Returned, uint256 reserveDelta
     );
+    event FlashBurstExecuted(
+        PoolId indexed poolId, address indexed caller, uint256 tokenId, uint128 liquidity, address executor
+    );
     event TreasuryUpdated(address indexed treasury);
 
     error PoolNotConfigured();
@@ -58,6 +62,7 @@ contract PegGuardJITManager is AccessControl {
     error BurstInactive();
     error DurationTooLong();
     error NativeCurrencyUnsupported();
+    error ExecutorCallFailed();
 
     mapping(address => bool) private permitConfigured;
 
@@ -98,7 +103,7 @@ contract PegGuardJITManager is AccessControl {
         uint64 duration
     ) external onlyRole(EXECUTOR_ROLE) returns (uint256 tokenId) {
         PoolId poolId = key.toId();
-        PoolJITConfig memory cfg = poolConfigs[poolId];
+        PoolJITConfig storage cfg = poolConfigs[poolId];
         if (cfg.maxDuration == 0) revert PoolNotConfigured();
         if (duration == 0) duration = cfg.maxDuration;
         if (duration > cfg.maxDuration) revert DurationTooLong();
@@ -171,6 +176,43 @@ contract PegGuardJITManager is AccessControl {
         }
 
         emit BurstSettled(poolId, burst.tokenId, amount0Collected, amount1Collected, reserveDelta);
+    }
+
+    function flashBurst(
+        PoolKey calldata key,
+        uint128 liquidity,
+        uint256 amount0Max,
+        uint256 amount1Max,
+        address executor,
+        bytes calldata executorData
+    )
+        external
+        onlyRole(EXECUTOR_ROLE)
+        returns (uint256 amount0Spent, uint256 amount1Spent, uint256 amount0Out, uint256 amount1Out)
+    {
+        PoolId poolId = key.toId();
+        PoolJITConfig storage cfg = poolConfigs[poolId];
+        if (cfg.tickLower >= cfg.tickUpper) revert PoolNotConfigured();
+
+        _approveCurrency(key.currency0);
+        _approveCurrency(key.currency1);
+        _ensurePermitApprovals(key.currency0);
+        _ensurePermitApprovals(key.currency1);
+
+        uint256 tokenId;
+        (tokenId, amount0Spent, amount1Spent) =
+            _mintPosition(key, cfg.tickLower, cfg.tickUpper, liquidity, amount0Max, amount1Max);
+
+        if (executor != address(0)) {
+            (bool ok,) = executor.call(executorData);
+            if (!ok) revert ExecutorCallFailed();
+        }
+
+        (amount0Out, amount1Out) = _burnPosition(key, tokenId, liquidity, 0, 0);
+        _payout(key.currency0, msg.sender, amount0Out);
+        _payout(key.currency1, msg.sender, amount1Out);
+
+        emit FlashBurstExecuted(poolId, msg.sender, tokenId, liquidity, executor);
     }
 
     function _pullFunding(Currency currency, address funder, uint256 amount) internal {
@@ -246,10 +288,12 @@ contract PegGuardJITManager is AccessControl {
         uint256 balance0Before = currency0.balanceOf(address(this));
         uint256 balance1Before = currency1.balanceOf(address(this));
 
-        bytes memory actions = abi.encodePacked(uint8(Actions.DECREASE_LIQUIDITY), uint8(Actions.TAKE_PAIR));
-        bytes[] memory params = new bytes[](2);
+        bytes memory actions =
+            abi.encodePacked(uint8(Actions.DECREASE_LIQUIDITY), uint8(Actions.TAKE_PAIR), uint8(Actions.BURN_POSITION));
+        bytes[] memory params = new bytes[](3);
         params[0] = abi.encode(tokenId, liquidity, amount0Min, amount1Min, bytes(""));
         params[1] = abi.encode(currency0, currency1, address(this));
+        params[2] = abi.encode(tokenId, address(this));
 
         positionManager.modifyLiquidities(abi.encode(actions, params), block.timestamp);
 
