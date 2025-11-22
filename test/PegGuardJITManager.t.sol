@@ -4,6 +4,7 @@ pragma solidity ^0.8.26;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
+import {HookMiner} from "@uniswap/v4-periphery/src/utils/HookMiner.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
@@ -49,10 +50,15 @@ contract PegGuardJITManagerTest is BaseTest {
         mockPyth = new MockPyth();
         adapter = new PythOracleAdapter(address(mockPyth));
 
-        address flags = address(uint160(Hooks.AFTER_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_FLAG) ^ (0x9999 << 144));
         bytes memory constructorArgs = abi.encode(poolManager, address(adapter), token1, address(this));
-        deployCodeTo("PegGuardHook.sol:PegGuardHook", constructorArgs, flags);
-        hook = PegGuardHook(flags);
+        uint160 flags = uint160(
+            Hooks.AFTER_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_FLAG | Hooks.BEFORE_ADD_LIQUIDITY_FLAG
+                | Hooks.BEFORE_REMOVE_LIQUIDITY_FLAG
+        );
+        (address expected, bytes32 salt) =
+            HookMiner.find(address(this), flags, type(PegGuardHook).creationCode, constructorArgs);
+        hook = new PegGuardHook{salt: salt}(poolManager, address(adapter), token1, address(this));
+        require(address(hook) == expected, "PegGuardJITManagerTest: hook address mismatch");
 
         poolKey = PoolKey(currency0, currency1, LPFeeLibrary.DYNAMIC_FEE_FLAG, 60, IHooks(hook));
         poolId = poolKey.toId();

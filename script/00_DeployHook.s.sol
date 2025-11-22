@@ -27,7 +27,10 @@ contract DeployHookScript is BaseScript {
         require(reserveToken != address(0), "DeployHookScript: RESERVE_TOKEN env missing");
 
         // hook contracts must have specific flags encoded in the address
-        uint160 flags = uint160(Hooks.AFTER_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_FLAG);
+        uint160 flags = uint160(
+            Hooks.AFTER_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_FLAG | Hooks.BEFORE_ADD_LIQUIDITY_FLAG
+                | Hooks.BEFORE_REMOVE_LIQUIDITY_FLAG
+        );
 
         // Mine a salt that will produce a hook address with the correct flags
         bytes memory constructorArgs = abi.encode(poolManager, pythAdapter, reserveToken, admin);
