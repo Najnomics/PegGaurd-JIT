@@ -19,6 +19,44 @@ These capabilities allow the system to stay lean during calm periods while going
 5. **Reserve & Treasury Manager** — Receives penalty fees, funds rebates, and enforces configurable reserve ratios per pool.
 6. **On-chain Keeper Coordinator** — The new `PegGuardKeeper` contract mirrors the sentinel logic from our reference repo and atomically flips pool modes/JIT windows based on live Pyth feeds, enforcing cool-down windows and deterministic thresholds.
 
+## Visual Architecture
+
+```mermaid
+graph LR
+    subgraph Oracle Layer
+        Pyth[Pyth Oracle]
+        Adapter[PythOracleAdapter]
+        Pyth --> Adapter
+    end
+
+    subgraph On-chain Core
+        Hook[PegGuardHook]
+        Keeper[PegGuardKeeper]
+        JIT[PegGuardJITManager]
+        FlashBorrower[PegGuardFlashBorrower]
+    end
+
+    Adapter --> Hook
+    Adapter --> Keeper
+    Keeper --> Hook
+    Keeper --> JIT
+    JIT --> Hook
+    FlashBorrower --> JIT
+    FlashBorrower --> Aave[Aave V3 Pool]
+
+    subgraph Off-chain Automation
+        KeeperBot[keeper.ts]
+        JITBot[jit.ts]
+    end
+
+    KeeperBot --> Adapter
+    KeeperBot --> Keeper
+    JITBot --> JIT
+
+    Users[Swappers & LPs] --> Hook
+    Hook --> Reserves[Treasury & Reserves]
+```
+
 ## Swap Lifecycle
 
 1. Sentinel detects volatility (>0.5% price gap from Pyth) and flags the pool.
@@ -30,6 +68,19 @@ These capabilities allow the system to stay lean during calm periods while going
    - levies an extra fee when a swap worsens the peg,
    - routes a rebate plus reserve contribution when the swap restores the peg.
 4. After the window closes liquidity is withdrawn, flash loans are repaid, and penalty fees are streamed to the reserve.
+
+## Pool Mode State Machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> Calm
+    Calm --> Alert: depeg ≥ alert threshold
+    Alert --> Calm: depeg < alert threshold
+    Alert --> Crisis: depeg ≥ crisis threshold
+    Crisis --> Alert: depeg < crisis threshold\nbut ≥ alert
+    Crisis --> Calm: depeg < alert threshold\nand cooldown satisfied
+    Crisis --> Crisis: keeper lockout\nor JIT active
+```
 
 ## User Flow
 
