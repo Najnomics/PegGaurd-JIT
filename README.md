@@ -61,6 +61,8 @@ test/       Forge-based hook tests
 ```bash
 forge install       # pulls dependencies declared in foundry.toml
 forge test          # runs the hook test suite
+# focused integration scenario
+forge test --match-path test/PegGuardIntegration.t.sol
 ```
 
 To experiment with scripts from the Uniswap template:

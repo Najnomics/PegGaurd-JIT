@@ -19,6 +19,7 @@ contract ConfigurePegGuardScript is Script {
         address keeperAddress = vm.envAddress("PEG_GUARD_KEEPER");
         address jitManagerAddress = vm.envAddress("PEG_GUARD_JIT_MANAGER");
         address deployer = vm.envAddress("PEG_GUARD_ADMIN");
+        address positionManager = _tryEnvAddress("POSITION_MANAGER");
 
         uint24 poolFeeFlag = uint24(vm.envOr("POOL_KEY_FEE", uint256(LPFeeLibrary.DYNAMIC_FEE_FLAG)));
 
@@ -61,6 +62,9 @@ contract ConfigurePegGuardScript is Script {
         hook.updateLiquidityAllowlist(poolKey, jitManagerAddress, true);
         hook.updateLiquidityAllowlist(poolKey, deployer, true);
         hook.updateLiquidityAllowlist(poolKey, keeperAddress, true);
+        if (positionManager != address(0)) {
+            hook.updateLiquidityAllowlist(poolKey, positionManager, true);
+        }
 
         PegGuardKeeper keeper = PegGuardKeeper(keeperAddress);
         keeper.setKeeperConfig(
@@ -86,5 +90,13 @@ contract ConfigurePegGuardScript is Script {
         );
 
         vm.stopBroadcast();
+    }
+
+    function _tryEnvAddress(string memory key) internal view returns (address value) {
+        try vm.envAddress(key) returns (address addr) {
+            value = addr;
+        } catch {
+            value = address(0);
+        }
     }
 }

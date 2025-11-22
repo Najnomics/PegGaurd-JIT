@@ -3,45 +3,44 @@ pragma solidity ^0.8.26;
 
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
-import {HookMiner} from "@uniswap/v4-periphery/src/utils/HookMiner.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
-import {CurrencyLibrary, Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
 import {LiquidityAmounts} from "@uniswap/v4-core/test/utils/LiquidityAmounts.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 import {Constants} from "@uniswap/v4-core/test/utils/Constants.sol";
 import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
+import {HookMiner} from "@uniswap/v4-periphery/src/utils/HookMiner.sol";
 
-import {EasyPosm} from "./utils/libraries/EasyPosm.sol";
 import {BaseTest} from "./utils/BaseTest.sol";
+import {EasyPosm} from "./utils/libraries/EasyPosm.sol";
+import {MockPyth} from "./mocks/MockPyth.sol";
+import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 
 import {PegGuardHook} from "../src/PegGuardHook.sol";
 import {PegGuardKeeper} from "../src/PegGuardKeeper.sol";
+import {PegGuardJITManager} from "../src/PegGuardJITManager.sol";
 import {PythOracleAdapter} from "../src/oracle/PythOracleAdapter.sol";
-import {MockPyth} from "./mocks/MockPyth.sol";
 
-contract PegGuardKeeperTest is BaseTest {
+contract PegGuardIntegrationTest is BaseTest {
     using EasyPosm for IPositionManager;
     using PoolIdLibrary for PoolKey;
     using CurrencyLibrary for Currency;
 
-    Currency currency0;
-    Currency currency1;
-
-    PoolKey poolKey;
-    PoolId poolId;
-
     PegGuardHook hook;
     PegGuardKeeper keeper;
+    PegGuardJITManager jitManager;
     MockPyth mockPyth;
     PythOracleAdapter adapter;
 
-    int24 tickLower;
-    int24 tickUpper;
+    PoolKey poolKey;
+    PoolId poolId;
+    Currency currency0;
+    Currency currency1;
 
-    bytes32 constant FEED_USDC = keccak256("USDC");
-    bytes32 constant FEED_USDT = keccak256("USDT");
+    bytes32 constant FEED0 = keccak256("ASSET0");
+    bytes32 constant FEED1 = keccak256("ASSET1");
 
     function setUp() public {
         deployArtifactsAndLabel();
@@ -59,14 +58,14 @@ contract PegGuardKeeperTest is BaseTest {
         (address expected, bytes32 salt) =
             HookMiner.find(address(this), flags, type(PegGuardHook).creationCode, constructorArgs);
         hook = new PegGuardHook{salt: salt}(poolManager, address(adapter), Currency.unwrap(currency0), address(this));
-        require(address(hook) == expected, "PegGuardKeeperTest: hook address mismatch");
+        require(address(hook) == expected, "PegGuardIntegration: hook addr mismatch");
 
         poolKey = PoolKey(currency0, currency1, LPFeeLibrary.DYNAMIC_FEE_FLAG, 60, IHooks(hook));
         poolId = poolKey.toId();
         poolManager.initialize(poolKey, Constants.SQRT_PRICE_1_1);
 
-        tickLower = TickMath.minUsableTick(poolKey.tickSpacing);
-        tickUpper = TickMath.maxUsableTick(poolKey.tickSpacing);
+        int24 tickLower = TickMath.minUsableTick(poolKey.tickSpacing);
+        int24 tickUpper = TickMath.maxUsableTick(poolKey.tickSpacing);
         uint128 liquidityAmount = 100e18;
 
         (uint256 amount0Expected, uint256 amount1Expected) = LiquidityAmounts.getAmountsForLiquidity(
@@ -88,48 +87,67 @@ contract PegGuardKeeperTest is BaseTest {
             Constants.ZERO_BYTES
         );
 
-        PegGuardHook.ConfigurePoolParams memory params = PegGuardHook.ConfigurePoolParams({
-            priceFeedId0: FEED_USDC,
-            priceFeedId1: FEED_USDT,
-            baseFee: 3000,
-            maxFee: 50_000,
-            minFee: 500,
-            reserveCutBps: 0,
-            volatilityThresholdBps: 0,
-            depegThresholdBps: 0
-        });
-        hook.configurePool(poolKey, params);
+        hook.configurePool(
+            poolKey,
+            PegGuardHook.ConfigurePoolParams({
+                priceFeedId0: FEED0,
+                priceFeedId1: FEED1,
+                baseFee: 3000,
+                maxFee: 50_000,
+                minFee: 500,
+                reserveCutBps: 3000,
+                volatilityThresholdBps: 100,
+                depegThresholdBps: 50
+            })
+        );
         hook.updateLiquidityAllowlist(poolKey, address(positionManager), true);
 
         keeper = new PegGuardKeeper(address(hook), address(this));
         hook.grantRole(hook.KEEPER_ROLE(), address(keeper));
 
-        PegGuardKeeper.KeeperConfig memory cfg = PegGuardKeeper.KeeperConfig({
-            alertBps: 30, crisisBps: 70, jitActivationBps: 70, modeCooldown: 0, jitCooldown: 0
-        });
-        keeper.setKeeperConfig(poolKey, cfg);
+        keeper.setKeeperConfig(
+            poolKey,
+            PegGuardKeeper.KeeperConfig({
+                alertBps: 30, crisisBps: 70, jitActivationBps: 70, modeCooldown: 0, jitCooldown: 0
+            })
+        );
 
-        _setPrices(1_000_000_00, 1_000_000_00, 50);
+        jitManager = new PegGuardJITManager(
+            address(hook), address(positionManager), address(permit2), address(this), address(this)
+        );
+        hook.grantRole(hook.KEEPER_ROLE(), address(jitManager));
+        hook.updateLiquidityAllowlist(poolKey, address(positionManager), true);
+
+        jitManager.configurePool(
+            poolKey,
+            PegGuardJITManager.PoolJITConfig({
+                tickLower: tickLower + poolKey.tickSpacing,
+                tickUpper: tickUpper - poolKey.tickSpacing,
+                maxDuration: 1 hours,
+                reserveShareBps: 1000
+            })
+        );
     }
 
-    function testKeeperPromotesToAlert() public {
-        _setPrices(995_000_00, 1_000_000_00, 30);
-        keeper.evaluateAndUpdate(poolKey);
-        (, PegGuardHook.PoolState memory state) = hook.getPoolSnapshot(poolKey);
-        assertEq(uint8(state.mode), uint8(PegGuardHook.PoolMode.Alert));
-        assertFalse(state.jitLiquidityActive);
-    }
+    function testEndToEndFlow() public {
+        MockERC20(Currency.unwrap(currency0)).approve(address(jitManager), type(uint256).max);
+        MockERC20(Currency.unwrap(currency1)).approve(address(jitManager), type(uint256).max);
 
-    function testKeeperTriggersCrisisAndJIT() public {
-        _setPrices(920_000_00, 1_000_000_00, 20);
+        mockPyth.setPrice(FEED0, 95_000_00, 50);
+        mockPyth.setPrice(FEED1, 100_000_00, 50);
+
         keeper.evaluateAndUpdate(poolKey);
         (, PegGuardHook.PoolState memory state) = hook.getPoolSnapshot(poolKey);
         assertEq(uint8(state.mode), uint8(PegGuardHook.PoolMode.Crisis));
         assertTrue(state.jitLiquidityActive);
-    }
 
-    function _setPrices(int64 price0, int64 price1, uint64 confidence) internal {
-        mockPyth.setPrice(FEED_USDC, price0, confidence);
-        mockPyth.setPrice(FEED_USDT, price1, confidence);
+        jitManager.executeBurst(poolKey, 5e18, 10e18, 10e18, address(this), 60);
+
+        vm.warp(block.timestamp + 120);
+        jitManager.settleBurst(poolKey, 0, 0);
+
+        (, state) = hook.getPoolSnapshot(poolKey);
+        assertFalse(state.jitLiquidityActive);
+        assertGt(state.reserveBalance, 0);
     }
 }

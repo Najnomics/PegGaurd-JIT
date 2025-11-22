@@ -103,7 +103,7 @@ contract PegGuardJITManagerTest is BaseTest {
             address(hook), address(positionManager), address(permit2), address(this), address(this)
         );
         hook.grantRole(hook.KEEPER_ROLE(), address(jitManager));
-        hook.updateLiquidityAllowlist(poolKey, address(jitManager), true);
+        hook.updateLiquidityAllowlist(poolKey, address(positionManager), true);
         hook.updateLiquidityAllowlist(poolKey, address(this), true);
 
         PegGuardJITManager.PoolJITConfig memory cfg = PegGuardJITManager.PoolJITConfig({
@@ -119,12 +119,20 @@ contract PegGuardJITManagerTest is BaseTest {
         uint256 funderToken0Before = IERC20(token0).balanceOf(address(this));
         uint256 funderToken1Before = IERC20(token1).balanceOf(address(this));
 
-        jitManager.executeBurst(poolKey, 10e18, 1_000e18, 1_000e18, address(this), 30 minutes);
+        try jitManager.executeBurst(poolKey, 10e18, 1_000e18, 1_000e18, address(this), 30 minutes) returns (uint256) {} catch (
+            bytes memory err
+        ) {
+            emit log_bytes(err);
+            fail();
+        }
         (, PegGuardHook.PoolState memory stateAfterBurst) = hook.getPoolSnapshot(poolKey);
         assertTrue(stateAfterBurst.jitLiquidityActive);
 
         vm.warp(block.timestamp + 31 minutes);
-        jitManager.settleBurst(poolKey, 0, 0);
+        try jitManager.settleBurst(poolKey, 0, 0) {} catch (bytes memory err) {
+            emit log_bytes(err);
+            fail();
+        }
 
         (, PegGuardHook.PoolState memory finalState) = hook.getPoolSnapshot(poolKey);
         assertFalse(finalState.jitLiquidityActive);

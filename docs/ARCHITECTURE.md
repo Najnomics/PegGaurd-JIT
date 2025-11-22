@@ -45,7 +45,7 @@ PegGuard JIT merges two blueprints:
 2. **Flash-Loan JIT** — (in progress) hook in Aave flash loans + `flashBurst` flows for single-block depth, followed by multi-block credit lines.
 3. **Keeper/Bot Expansion** — multi-pool configs, alerting, retry logic.
 4. **Deployment Tooling** – scripts mirroring the Uniswap template, CLI harnesses.
-5. **Integration Tests & Simulations** – Universal Router swaps + fork tests.
+5. **Integration Tests & Simulations** – `test/PegGuardIntegration.t.sol` ties hook + keeper + JIT manager together; extend with Universal Router/fork tests next.
 6. **Docs & Ops** – runbooks, alert layouts, env templates.
 
 Refer back to `README.md` for high-level positioning; this document focuses on the merged architecture and the delta between the upstream repos.***

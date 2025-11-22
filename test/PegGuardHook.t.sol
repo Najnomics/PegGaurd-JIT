@@ -104,6 +104,7 @@ contract PegGuardHookTest is BaseTest {
 
         hook.configurePool(poolKey, params);
         hook.grantRole(hook.KEEPER_ROLE(), address(this));
+        hook.updateLiquidityAllowlist(poolKey, address(positionManager), true);
 
         _setPrices(1_000_000_00, 1_000_000_00, 100);
     }
@@ -163,6 +164,10 @@ contract PegGuardHookTest is BaseTest {
 
     function testCannotAddLiquidityWhenAllowlistEnforced() public {
         hook.setLiquidityPolicy(poolKey, true);
+        (PegGuardHook.PoolConfig memory cfg,) = hook.getPoolSnapshot(poolKey);
+        assertTrue(cfg.enforceAllowlist);
+        hook.updateLiquidityAllowlist(poolKey, address(positionManager), false);
+        assertFalse(hook.isAllowlisted(poolKey, address(positionManager)));
 
         uint128 liquidityAmount = 1e18;
         (uint256 amount0Expected, uint256 amount1Expected) = LiquidityAmounts.getAmountsForLiquidity(
@@ -185,7 +190,8 @@ contract PegGuardHookTest is BaseTest {
             Constants.ZERO_BYTES
         );
 
-        hook.updateLiquidityAllowlist(poolKey, address(this), true);
+        hook.updateLiquidityAllowlist(poolKey, address(positionManager), true);
+        assertTrue(hook.isAllowlisted(poolKey, address(positionManager)));
         positionManager.mint(
             poolKey,
             tickLower,
@@ -203,7 +209,7 @@ contract PegGuardHookTest is BaseTest {
         int24 targetLower = tickLower + poolKey.tickSpacing;
         int24 targetUpper = tickUpper - poolKey.tickSpacing;
         hook.setTargetRange(poolKey, targetLower, targetUpper);
-        hook.updateLiquidityAllowlist(poolKey, address(this), true);
+        hook.updateLiquidityAllowlist(poolKey, address(positionManager), true);
         hook.setJITWindow(poolKey, true);
 
         uint128 liquidityAmount = 5e17;
