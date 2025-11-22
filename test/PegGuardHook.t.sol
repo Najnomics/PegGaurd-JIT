@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
+import {CustomRevert} from "@uniswap/v4-core/src/libraries/CustomRevert.sol";
 import {HookMiner} from "@uniswap/v4-periphery/src/utils/HookMiner.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
@@ -177,8 +178,7 @@ contract PegGuardHookTest is BaseTest {
             liquidityAmount
         );
 
-        vm.expectRevert(PegGuardHook.UnauthorizedLiquidityProvider.selector);
-        positionManager.mint(
+        try this.mintWithHelper(
             poolKey,
             tickLower,
             tickUpper,
@@ -188,7 +188,11 @@ contract PegGuardHookTest is BaseTest {
             address(this),
             block.timestamp,
             Constants.ZERO_BYTES
-        );
+        ) {
+            fail("expected allowlist revert");
+        } catch (bytes memory err) {
+            _assertBeforeAddLiquidityRevert(err, PegGuardHook.UnauthorizedLiquidityProvider.selector);
+        }
 
         hook.updateLiquidityAllowlist(poolKey, address(positionManager), true);
         assertTrue(hook.isAllowlisted(poolKey, address(positionManager)));
@@ -220,8 +224,7 @@ contract PegGuardHookTest is BaseTest {
             liquidityAmount
         );
 
-        vm.expectRevert(PegGuardHook.TargetRangeViolation.selector);
-        positionManager.mint(
+        try this.mintWithHelper(
             poolKey,
             tickLower,
             tickUpper,
@@ -231,7 +234,11 @@ contract PegGuardHookTest is BaseTest {
             address(this),
             block.timestamp,
             Constants.ZERO_BYTES
-        );
+        ) {
+            fail("expected target range revert");
+        } catch (bytes memory err) {
+            _assertBeforeAddLiquidityRevert(err, PegGuardHook.TargetRangeViolation.selector);
+        }
 
         (uint256 allowedAmount0, uint256 allowedAmount1) = LiquidityAmounts.getAmountsForLiquidity(
             Constants.SQRT_PRICE_1_1,
@@ -255,6 +262,27 @@ contract PegGuardHookTest is BaseTest {
         hook.setJITWindow(poolKey, false);
     }
 
+    function _assertBeforeAddLiquidityRevert(bytes memory err, bytes4 expectedInner) internal view {
+        bytes4 outerSelector = bytes4(err);
+        assertEq(outerSelector, CustomRevert.WrappedError.selector, "unexpected outer selector");
+
+        bytes memory data = err;
+        assembly {
+            data := add(data, 0x04)
+            mstore(data, sub(mload(data), 0x04))
+        }
+
+        (address target, bytes4 hookSelector, bytes memory revertReason, bytes memory context) =
+            abi.decode(data, (address, bytes4, bytes, bytes));
+
+        assertEq(target, address(hook), "unexpected hook target");
+        assertEq(hookSelector, IHooks.beforeAddLiquidity.selector, "unexpected hook selector");
+        require(revertReason.length >= 4, "missing inner selector");
+        assertEq(bytes4(revertReason), expectedInner, "unexpected inner error");
+        require(context.length >= 4, "missing context selector");
+        assertEq(bytes4(context), Hooks.HookCallFailed.selector, "unexpected context selector");
+    }
+
     function _swap(bool zeroForOne) internal returns (BalanceDelta swapDelta) {
         swapDelta = swapRouter.swapExactTokensForTokens({
             amountIn: 1e18,
@@ -270,5 +298,21 @@ contract PegGuardHookTest is BaseTest {
     function _setPrices(int64 price0, int64 price1, uint64 confidence) internal {
         mockPyth.setPrice(FEED_USDC, price0, confidence);
         mockPyth.setPrice(FEED_USDT, price1, confidence);
+    }
+
+    function mintWithHelper(
+        PoolKey memory key,
+        int24 lower,
+        int24 upper,
+        uint256 liquidity,
+        uint256 amount0Max,
+        uint256 amount1Max,
+        address recipient,
+        uint256 deadline,
+        bytes memory hookData
+    ) external returns (uint256 tokenId, BalanceDelta delta) {
+        return positionManager.mint(
+            key, lower, upper, liquidity, amount0Max, amount1Max, recipient, deadline, hookData
+        );
     }
 }

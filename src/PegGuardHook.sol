@@ -423,18 +423,20 @@ contract PegGuardHook is BaseOverrideFee, AccessControl {
         bytes calldata
     ) internal override returns (bytes4) {
         PoolId poolId = key.toId();
-        // Read directly from storage mappings (same approach as getPoolSnapshot)
+        // Read directly from storage mappings (exact same approach as getPoolSnapshot)
         PoolConfig storage config = poolConfigs[poolId];
         PoolState storage storedState = poolStates[poolId];
         
         // Check if allowlist enforcement is needed
-        // Use separate mappings first, then fall back to struct storage (same as getPoolSnapshot)
-        bool enforceAllowlist = _enforceAllowlistFlags[poolId];
+        // Mirror getPoolSnapshot semantics: stored state is source of truth, then config/mappings
+        bool enforceAllowlist = storedState.enforceAllowlist;
         if (!enforceAllowlist) {
-            // Fall back to struct storage (same pattern as getPoolSnapshot)
-            enforceAllowlist = storedState.enforceAllowlist || config.enforceAllowlist;
+            enforceAllowlist = config.enforceAllowlist || _enforceAllowlistFlags[poolId];
         }
-        bool jitActive = _jitActiveFlags[poolId] || storedState.jitLiquidityActive;
+        bool jitActive = storedState.jitLiquidityActive;
+        if (!jitActive) {
+            jitActive = _jitActiveFlags[poolId];
+        }
         bool mustBeAllowlisted = jitActive || enforceAllowlist;
         
         // In Uniswap v4, the sender is the caller (e.g., PositionManager)
