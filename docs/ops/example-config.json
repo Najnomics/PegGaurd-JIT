@@ -1,0 +1,55 @@
+{
+  "rpcUrl": "https://mainnet.infura.io/v3/your-key",
+  "privateKey": "0xyourkey",
+  "keeper": {
+    "contract": "0xKeeper",
+    "pyth": "0xPyth",
+    "jobs": [
+      {
+        "id": "usdc-usdt",
+        "pool": {
+          "currency0": "0xA0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+          "currency1": "0xdac17f958d2ee523a2206206994597c13d831ec7",
+          "fee": 8388608,
+          "tickSpacing": 10,
+          "hooks": "0xHook"
+        },
+        "priceFeedIds": [
+          "0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a",
+          "0x2b89b9dc8fdf9f34709a5b106b472f0f39bb6ca9ce04b0fd7f2e971688e2e53b"
+        ],
+        "intervalMs": 60000
+      }
+    ]
+  },
+  "jit": {
+    "manager": "0xManager",
+    "hook": "0xHook",
+    "jobs": [
+      {
+        "id": "usdc-usdt",
+        "pool": {
+          "currency0": "0xA0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+          "currency1": "0xdac17f958d2ee523a2206206994597c13d831ec7",
+          "fee": 8388608,
+          "tickSpacing": 10,
+          "hooks": "0xHook"
+        },
+        "liquidity": "1000000000000000000",
+        "amount0Max": "0",
+        "amount1Max": "0",
+        "duration": 900,
+        "modeThreshold": 2,
+        "settleBufferSec": 5,
+        "intervalMs": 45000,
+        "flashBorrower": {
+          "address": "0xFlashBorrower",
+          "asset": "0xA0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+          "amount": "5000000000000000000",
+          "executor": "0xExecutor",
+          "executorData": "0x"
+        }
+      }
+    ]
+  }
+}

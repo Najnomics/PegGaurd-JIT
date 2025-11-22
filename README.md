@@ -114,6 +114,7 @@ Run the bots by exporting the required env vars (RPC URL, private key, pool addr
 
 - `POOL_KEY_FEE` must equal the actual `PoolKey.fee` stored on-chain. For dynamic-fee pools set it to `0x800000` (`LPFeeLibrary.DYNAMIC_FEE_FLAG`) so the hook/keeper/JIT manager all hash to the same `PoolId`.
 - See `docs/ARCHITECTURE.md` for an in-depth breakdown of how the Depeg Sentinel + JIT vault patterns are merged, reserve flows, automation layout, and the remaining roadmap.
+- Multi-pool automation: set `PEG_GUARD_CONFIG=/path/to/config.json` and follow `docs/ops/runtime-config.md` for keeper/JIT bot configuration (sample at `docs/ops/example-config.json`).
 
 
 ## Hackathon Delivery Roadmap

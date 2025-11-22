@@ -2,15 +2,9 @@ import { PriceServiceConnection } from "@pythnetwork/price-service-client";
 import { ethers } from "ethers";
 import dotenv from "dotenv";
 
-dotenv.config();
+import { loadPegGuardConfig, KeeperJobConfig, toPoolKeyTuple } from "./config.js";
 
-type PoolKey = {
-  currency0: string;
-  currency1: string;
-  fee: number;
-  tickSpacing: number;
-  hooks: string;
-};
+dotenv.config();
 
 const keeperAbi = [
   "function evaluateAndUpdate((address,address,uint24,int24,address)) external",
@@ -22,87 +16,123 @@ const pythAbi = [
   "function updatePriceFeeds(bytes[] calldata priceUpdateData) external payable"
 ] as const;
 
-const DYNAMIC_FEE_FLAG = 0x800000;
+type RuntimeJob = KeeperJobConfig & { poolTuple: ReturnType<typeof toPoolKeyTuple>; label: string };
 
-const {
-  RPC_URL,
-  PRIVATE_KEY,
-  PEG_GUARD_KEEPER,
-  PEG_GUARD_PYTH,
-  POOL_CURRENCY0,
-  POOL_CURRENCY1,
-  POOL_TICK_SPACING,
-  PEG_GUARD_HOOK,
-  PRICE_FEED_IDS,
-  PYTH_ENDPOINT = "https://xc-mainnet.pyth.network",
-  KEEPER_INTERVAL_MS = "60000"
-} = process.env;
+const DEFAULT_ENDPOINT = process.env.PYTH_ENDPOINT ?? "https://xc-mainnet.pyth.network";
+const DEFAULT_INTERVAL = Number(process.env.KEEPER_INTERVAL_MS ?? "60000");
 
-if (
-  !RPC_URL ||
-  !PRIVATE_KEY ||
-  !PEG_GUARD_KEEPER ||
-  !PEG_GUARD_PYTH ||
-  !POOL_CURRENCY0 ||
-  !POOL_CURRENCY1 ||
-  !POOL_TICK_SPACING ||
-  !PEG_GUARD_HOOK ||
-  !PRICE_FEED_IDS
-) {
-  throw new Error("Missing keeper configuration env vars");
+const configFile = loadPegGuardConfig(process.env.PEG_GUARD_CONFIG);
+
+const RPC_URL = configFile?.rpcUrl ?? process.env.RPC_URL;
+const PRIVATE_KEY = configFile?.privateKey ?? process.env.PRIVATE_KEY;
+const KEEPER_ADDRESS = configFile?.keeper?.contract ?? process.env.PEG_GUARD_KEEPER;
+const PYTH_ADDRESS = configFile?.keeper?.pyth ?? process.env.PEG_GUARD_PYTH;
+
+if (!RPC_URL || !PRIVATE_KEY || !KEEPER_ADDRESS || !PYTH_ADDRESS) {
+  throw new Error("Keeper configuration missing RPC_URL / PRIVATE_KEY / keeper + pyth contracts");
 }
 
-const poolFeeFlag =
-  process.env.POOL_KEY_FEE !== undefined
-    ? Number(process.env.POOL_KEY_FEE)
-    : DYNAMIC_FEE_FLAG;
-
-const poolKey: PoolKey = {
-  currency0: ethers.getAddress(POOL_CURRENCY0),
-  currency1: ethers.getAddress(POOL_CURRENCY1),
-  fee: poolFeeFlag,
-  tickSpacing: Number(POOL_TICK_SPACING),
-  hooks: ethers.getAddress(PEG_GUARD_HOOK)
-};
-
-const poolKeyTuple = [
-  poolKey.currency0,
-  poolKey.currency1,
-  poolKey.fee,
-  poolKey.tickSpacing,
-  poolKey.hooks
-];
+const jobs = buildJobs();
+if (jobs.length === 0) throw new Error("No keeper jobs configured");
 
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
-const keeper = new ethers.Contract(PEG_GUARD_KEEPER, keeperAbi, wallet);
-const pyth = new ethers.Contract(PEG_GUARD_PYTH, pythAbi, wallet);
+const keeper = new ethers.Contract(KEEPER_ADDRESS, keeperAbi, wallet);
+const pyth = new ethers.Contract(PYTH_ADDRESS, pythAbi, wallet);
 
-const priceFeedIds = PRICE_FEED_IDS.split(",").map((id) => id.trim());
-const priceService = new PriceServiceConnection(PYTH_ENDPOINT);
-const intervalMs = Number(KEEPER_INTERVAL_MS);
+const priceServiceCache = new Map<string, PriceServiceConnection>();
 
-async function runCycle() {
-  try {
-    console.log(`[keeper] fetching price updates for ${priceFeedIds.join(",")}`);
-    const updateData = await priceService.getPriceFeedsUpdateData(priceFeedIds);
-    const fee = await pyth.getUpdateFee(updateData);
-    const updateTx = await pyth.updatePriceFeeds(updateData, { value: fee });
-    await updateTx.wait();
-    console.log(`[keeper] pushed Pyth update. tx=${updateTx.hash}`);
-
-    const evalTx = await keeper.evaluateAndUpdate(poolKeyTuple);
-    const receipt = await evalTx.wait();
-    console.log(`[keeper] evaluateAndUpdate mined. tx=${receipt.hash}`);
-  } catch (err) {
-    console.error(`[keeper] cycle failed`, err);
+function getPriceService(endpoint: string) {
+  if (!priceServiceCache.has(endpoint)) {
+    priceServiceCache.set(endpoint, new PriceServiceConnection(endpoint));
   }
+  return priceServiceCache.get(endpoint)!;
+}
+
+function buildJobs(): RuntimeJob[] {
+  if (configFile?.keeper?.jobs?.length) {
+    return configFile.keeper.jobs.map((job, idx) => ({
+      ...job,
+      poolTuple: toPoolKeyTuple(job.pool),
+      label: job.id ?? `job-${idx + 1}`
+    }));
+  }
+
+  const {
+    POOL_CURRENCY0,
+    POOL_CURRENCY1,
+    POOL_TICK_SPACING,
+    PEG_GUARD_HOOK,
+    PRICE_FEED_IDS,
+    POOL_KEY_FEE
+  } = process.env;
+
+  if (
+    !POOL_CURRENCY0 ||
+    !POOL_CURRENCY1 ||
+    !POOL_TICK_SPACING ||
+    !PEG_GUARD_HOOK ||
+    !PRICE_FEED_IDS
+  ) {
+    return [];
+  }
+
+  const job: KeeperJobConfig = {
+    id: "env",
+    pool: {
+      currency0: POOL_CURRENCY0,
+      currency1: POOL_CURRENCY1,
+      fee:
+        POOL_KEY_FEE !== undefined
+          ? Number(POOL_KEY_FEE)
+          : 0x800000,
+      tickSpacing: Number(POOL_TICK_SPACING),
+      hooks: PEG_GUARD_HOOK
+    },
+    priceFeedIds: PRICE_FEED_IDS.split(",").map((id) => id.trim()),
+    intervalMs: DEFAULT_INTERVAL,
+    pythEndpoint: DEFAULT_ENDPOINT
+  };
+
+  return [{ ...job, poolTuple: toPoolKeyTuple(job.pool), label: job.id ?? "env" }];
+}
+
+async function runJob(job: RuntimeJob) {
+  const interval = job.intervalMs ?? DEFAULT_INTERVAL;
+  const endpoint = job.pythEndpoint ?? DEFAULT_ENDPOINT;
+  const connection = getPriceService(endpoint);
+  const feedIds = job.priceFeedIds.map((id) => id.trim()).filter(Boolean);
+  if (feedIds.length === 0) {
+    console.warn(`[keeper:${job.label}] No feed IDs configured, skipping`);
+    return;
+  }
+
+  const execute = async () => {
+    try {
+      console.log(`[keeper:${job.label}] fetching price updates`);
+      const updateData = await connection.getPriceFeedsUpdateData(feedIds);
+      const fee = await pyth.getUpdateFee(updateData);
+      const updateTx = await pyth.updatePriceFeeds(updateData, { value: fee });
+      await updateTx.wait();
+      console.log(`[keeper:${job.label}] pushed Pyth update tx=${updateTx.hash}`);
+
+      const evalTx = await keeper.evaluateAndUpdate(job.poolTuple);
+      const receipt = await evalTx.wait();
+      console.log(`[keeper:${job.label}] evaluateAndUpdate tx=${receipt.hash}`);
+    } catch (err) {
+      console.error(`[keeper:${job.label}] cycle failed`, err);
+    }
+  };
+
+  await execute();
+  setInterval(execute, interval);
 }
 
 async function main() {
-  console.log(`[keeper] booting PegGuard keeper for ${PEG_GUARD_KEEPER}`);
-  await runCycle();
-  setInterval(runCycle, intervalMs);
+  console.log(`[keeper] managing ${jobs.length} pool(s) via ${KEEPER_ADDRESS}`);
+  for (const job of jobs) {
+    runJob(job);
+  }
 }
 
 main().catch((err) => {
