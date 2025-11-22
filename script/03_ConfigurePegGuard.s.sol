@@ -10,6 +10,7 @@ import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
 import {PegGuardHook} from "../src/PegGuardHook.sol";
 import {PegGuardKeeper} from "../src/PegGuardKeeper.sol";
 import {PegGuardJITManager} from "../src/PegGuardJITManager.sol";
+import {AddressConstants} from "./constants/AddressConstants.sol";
 
 contract ConfigurePegGuardScript is Script {
     using CurrencyLibrary for Currency;
@@ -23,9 +24,13 @@ contract ConfigurePegGuardScript is Script {
 
         uint24 poolFeeFlag = uint24(vm.envOr("POOL_KEY_FEE", uint256(LPFeeLibrary.DYNAMIC_FEE_FLAG)));
 
+        // Support canonical addresses via env vars or fallback to direct addresses
+        address currency0 = _getTokenAddress("POOL_CURRENCY0");
+        address currency1 = _getTokenAddress("POOL_CURRENCY1");
+
         PoolKey memory poolKey = PoolKey({
-            currency0: Currency.wrap(vm.envAddress("POOL_CURRENCY0")),
-            currency1: Currency.wrap(vm.envAddress("POOL_CURRENCY1")),
+            currency0: Currency.wrap(currency0),
+            currency1: Currency.wrap(currency1),
             fee: poolFeeFlag,
             tickSpacing: int24(int256(vm.envInt("POOL_TICK_SPACING"))),
             hooks: IHooks(hookAddress)
@@ -97,6 +102,23 @@ contract ConfigurePegGuardScript is Script {
             value = addr;
         } catch {
             value = address(0);
+        }
+    }
+
+    /// @notice Get token address from env var, with fallback to canonical addresses
+    /// @dev Supports both direct addresses and token symbols (WETH, USDC, USDT, DAI)
+    function _getTokenAddress(string memory key) internal view returns (address) {
+        // Try to read as direct address first
+        try vm.envAddress(key) returns (address addr) {
+            return addr;
+        } catch {
+            // Try to read as token symbol and look up canonical address
+            try vm.envString(key) returns (string memory symbol) {
+                uint256 network = vm.envOr("NETWORK_ID", uint256(0)); // 0 = mainnet, 1 = sepolia
+                return AddressConstants.getTokenAddress(network, symbol);
+            } catch {
+                revert(string.concat("ConfigurePegGuard: missing ", key));
+            }
         }
     }
 }

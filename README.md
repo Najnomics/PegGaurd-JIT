@@ -65,12 +65,91 @@ forge test          # runs the hook test suite
 forge test --match-path test/PegGuardIntegration.t.sol
 ```
 
-To experiment with scripts from the Uniswap template:
+## Deployment
+
+### Single Pool Deployment
+
+Deploy and configure a single PegGuard pool:
 
 ```bash
-anvil --fork-url <RPC>
-forge script script/00_DeployHook.s.sol --rpc-url http://localhost:8545 --private-key <KEY> --broadcast
+# 1. Deploy the hook
+forge script script/00_DeployHook.s.sol --rpc-url $RPC_URL --private-key $PRIVATE_KEY --broadcast
+
+# 2. Deploy keeper and JIT manager
+forge script script/05_DeployKeeperAndJIT.s.sol --rpc-url $RPC_URL --private-key $PRIVATE_KEY --broadcast
+
+# 3. Deploy flash borrower (optional, for flash-loan bursts)
+forge script script/04_DeployFlashBorrower.s.sol --rpc-url $RPC_URL --private-key $PRIVATE_KEY --broadcast
+
+# 4. Configure the pool
+forge script script/03_ConfigurePegGuard.s.sol --rpc-url $RPC_URL --private-key $PRIVATE_KEY --broadcast
 ```
+
+### Multi-Pool Deployment
+
+Deploy multiple pools from a JSON configuration file:
+
+```bash
+forge script script/06_MultiPoolDeploy.s.sol \
+  --rpc-url $RPC_URL \
+  --private-key $PRIVATE_KEY \
+  --broadcast \
+  --sig "run()" \
+  --env POOL_CONFIG_JSON=config/example-pools.json
+```
+
+See `config/example-pools.json` for the expected JSON format.
+
+### Environment Variables
+
+Required environment variables for deployment:
+
+**Core Contracts:**
+- `PEG_GUARD_HOOK` - Deployed hook address
+- `PEG_GUARD_KEEPER` - Deployed keeper address
+- `PEG_GUARD_JIT_MANAGER` - Deployed JIT manager address
+- `PEG_GUARD_ADMIN` - Admin address for role grants
+- `POSITION_MANAGER` - Uniswap v4 PositionManager address
+- `PERMIT2` - Permit2 contract address
+- `POOL_MANAGER` - Uniswap v4 PoolManager address
+
+**Pool Configuration:**
+- `POOL_CURRENCY0` - Token address or symbol (WETH, USDC, USDT, DAI)
+- `POOL_CURRENCY1` - Token address or symbol
+- `POOL_TICK_SPACING` - Tick spacing (e.g., 60)
+- `POOL_KEY_FEE` - Fee flag (use `0x800000` for dynamic fees)
+- `PRICE_FEED_ID0` - Pyth price feed ID for currency0
+- `PRICE_FEED_ID1` - Pyth price feed ID for currency1
+- `POOL_BASE_FEE` - Base fee in bps (e.g., 3000 = 0.3%)
+- `POOL_MAX_FEE` - Maximum fee in bps (e.g., 50000 = 5%)
+- `POOL_MIN_FEE` - Minimum fee in bps (e.g., 500 = 0.05%)
+
+**Keeper Configuration:**
+- `KEEPER_ALERT_BPS` - Alert threshold in bps
+- `KEEPER_CRISIS_BPS` - Crisis threshold in bps
+- `KEEPER_JIT_BPS` - JIT activation threshold in bps
+- `KEEPER_MODE_COOLDOWN` - Mode change cooldown in seconds
+- `KEEPER_JIT_COOLDOWN` - JIT toggle cooldown in seconds
+
+**JIT Configuration:**
+- `JIT_TICK_LOWER` - Lower tick for JIT liquidity
+- `JIT_TICK_UPPER` - Upper tick for JIT liquidity
+- `JIT_MAX_DURATION` - Maximum burst duration in seconds
+- `JIT_RESERVE_SHARE_BPS` - Reserve share in bps (e.g., 1000 = 10%)
+
+**Optional:**
+- `NETWORK_ID` - Network identifier (0 = mainnet, 1 = sepolia) for canonical addresses
+- `TARGET_TICK_LOWER` - Target range lower tick
+- `TARGET_TICK_UPPER` - Target range upper tick
+- `POOL_ENFORCE_ALLOWLIST` - Enable allowlist enforcement (true/false)
+- `TREASURY` - Treasury address for reserve shares (defaults to admin)
+
+**Aave Integration:**
+- `AAVE_POOL` - Aave V3 pool address (or use canonical address via NETWORK_ID)
+
+### Canonical Addresses
+
+The deployment scripts support canonical token addresses via the `AddressConstants` library. Set `NETWORK_ID=0` for mainnet or `NETWORK_ID=1` for Sepolia, then use token symbols (WETH, USDC, USDT, DAI) instead of addresses in `POOL_CURRENCY0` and `POOL_CURRENCY1`.
 
 ## Production Development Plan
 
