@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {IPyth} from "./interfaces/IPyth.sol";
-import {PythStructs} from "./interfaces/PythStructs.sol";
+import {IPyth} from "@pythnetwork/pyth-sdk-solidity/IPyth.sol";
+import {PythStructs} from "@pythnetwork/pyth-sdk-solidity/PythStructs.sol";
 
 /// @notice Lightweight adapter around Pyth price feeds that exposes normalized helpers
 /// used by the PegGuard hook.

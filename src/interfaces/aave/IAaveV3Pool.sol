@@ -1,14 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-interface IAaveV3Pool {
-    function flashLoanSimple(
-        address receiverAddress,
-        address asset,
-        uint256 amount,
-        bytes calldata params,
-        uint16 referralCode
-    ) external;
+import {IPool} from "protocol-v3/contracts/interfaces/IPool.sol";
 
-    function ADDRESSES_PROVIDER() external view returns (address);
-}
+// Alias for convenience - matches Aave v3 IPool interface
+interface IAaveV3Pool is IPool {}

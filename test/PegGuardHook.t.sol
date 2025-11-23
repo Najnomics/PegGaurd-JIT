@@ -117,9 +117,8 @@ contract PegGuardHookTest is BaseTest {
             liquidityAmount
         );
 
-        MintExecutor.MintParams memory initParams = _buildMintParams(
-            poolKey, tickLower, tickUpper, liquidityAmount, amount0Expected + 1, amount1Expected + 1
-        );
+        MintExecutor.MintParams memory initParams =
+            _buildMintParams(poolKey, tickLower, tickUpper, liquidityAmount, amount0Expected + 1, amount1Expected + 1);
         (positionTokenId,) = _mintPosition(initParams);
 
         PegGuardHook.ConfigurePoolParams memory params = PegGuardHook.ConfigurePoolParams({
@@ -216,9 +215,8 @@ contract PegGuardHookTest is BaseTest {
 
         hook.updateLiquidityAllowlist(poolKey, address(positionManager), true);
         assertTrue(hook.isAllowlisted(poolKey, address(positionManager)));
-        MintExecutor.MintParams memory allowParams = _buildMintParams(
-            poolKey, tickLower, tickUpper, liquidityAmount, amount0Expected + 1, amount1Expected + 1
-        );
+        MintExecutor.MintParams memory allowParams =
+            _buildMintParams(poolKey, tickLower, tickUpper, liquidityAmount, amount0Expected + 1, amount1Expected + 1);
         _mintPosition(allowParams);
     }
 
@@ -286,13 +284,10 @@ contract PegGuardHookTest is BaseTest {
         return abi.decode(data, (uint256, BalanceDelta));
     }
 
-    function _delegateMint(MintExecutor.MintParams memory params)
-        internal
-        returns (bool success, bytes memory data)
-    {
-        return address(mintExecutor).delegatecall(
-            abi.encodeWithSelector(MintExecutor.mint.selector, positionManager, params)
-        );
+    function _delegateMint(MintExecutor.MintParams memory params) internal returns (bool success, bytes memory data) {
+        return
+            address(mintExecutor)
+                .delegatecall(abi.encodeWithSelector(MintExecutor.mint.selector, positionManager, params));
     }
 
     function _assertBeforeAddLiquidityRevert(bytes memory err, bytes4 expectedInner) internal view {
@@ -332,5 +327,4 @@ contract PegGuardHookTest is BaseTest {
         mockPyth.setPrice(FEED_USDC, price0, confidence);
         mockPyth.setPrice(FEED_USDT, price1, confidence);
     }
-
 }

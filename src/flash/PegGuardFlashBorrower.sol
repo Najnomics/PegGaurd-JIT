@@ -40,7 +40,7 @@ contract PegGuardFlashBorrower is AccessControl, IFlashLoanSimpleReceiver {
         require(_jitManager != address(0) && _lendingPool != address(0), "FlashBorrower: zero");
         jitManager = PegGuardJITManager(_jitManager);
         lendingPool = IAaveV3Pool(_lendingPool);
-        addressesProvider = lendingPool.ADDRESSES_PROVIDER();
+        addressesProvider = address(lendingPool.ADDRESSES_PROVIDER());
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(EXECUTOR_ROLE, admin);
