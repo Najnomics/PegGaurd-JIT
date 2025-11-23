@@ -202,6 +202,30 @@ Required environment variables for deployment:
 
 The deployment scripts support canonical token addresses via the `AddressConstants` library. Set `NETWORK_ID=0` for mainnet or `NETWORK_ID=1` for Sepolia, then use token symbols (WETH, USDC, USDT, DAI) instead of addresses in `POOL_CURRENCY0` and `POOL_CURRENCY1`.
 
+### Sepolia Reference Deployment
+
+| Component | Address | Verification | Deploy Tx |
+| --- | --- | --- | --- |
+| PythOracleAdapter | `0x7F7408E16450c7c968fFef0a9E2e351232F54eA8` | Etherscan (standard) | `0xa8f00ff884a6a7645c428ef7260d0c3ef9ba86bd4334455ee63280308b2ded6c` |
+| PegGuardHook | `0xBE98d00E9f9676F7195985d278b40F5A4610Da80` | Sourcify (Etherscan recognizes) | `0xc3899b9172cd6c0eabd0715268c0fcfad98081a51e8711633fcbe9779f97dedd` |
+| PegGuardKeeper | `0x9C93926BcEf5Af829FA2e9B096fabb87508350ae` | Sourcify | `0x31b8fb4fff3414b2051f4ac0432e866467292ae8aa43662d56edec74c5e82dba` |
+| PegGuardJITManager | `0x5E2DD3d96E81925e142d2F0dE2916aA952bb598f` | Sourcify | `0x9dc77e5c776dfda505e439e17efc1b1390bbe1e5f012be2ed94fe602b60fcafc` |
+| PegGuardFlashBorrower | `0x8195D5Fdf8B825609f73188bb14b28413D0dc812` | Sourcify | `0x9ce0302fece908d29c02c212c84ec97b3315709ebdddeab201afc3ce2c121b64` |
+
+- Hook configuration + policies (`script/03_ConfigurePegGuard.s.sol`):  
+  `0x6468372692ad49f5ddd1a96a2a7278f4885d2146b880ea937baee3c39b034253`,  
+  `0x527862c380730135ef7c942d4bf2a265e499ed3fd102b8034a3eaf55be426a8f`,  
+  `0x3d5ea4813754aca15de281fd7a97c9717eb3aa5ec1a81b72966e22d946f8b0aa`,  
+  `0xc3feeb05b5c708303856f7addc99c1e58ec278971656ffd06fc70a91c7e79335`,  
+  `0xec7769b9f0e88672a3337c5a46fb1ae4f7eb4c94fad6e617ac5342aad7a19888`,  
+  `0x75da5e870a56473d47a09d741a9eb198e87fc27a7f12ff0842561acf2663b19b`,  
+  `0x3e64e077551e383743a9a0d65b391f3cc8161f19b3bd92f6dcd64c096b808189`,  
+  `0x58d8fc20c0d30bd65bcfc5a8e381c6a80380b1006c30e3cb779b5f1fbcd1fca7`.
+- Keeper evaluation test (proves hook flow): `0x977ab1dc419f116bb6cfd23a87e1d4d53d9901166bef357d17dbc5e081b96e9c`
+
+> **Note on verification:** The Etherscan V1 endpoint cannot resolve nested imports like `src/base/BaseHook.sol`, so we verified contracts via Sourcify (supported by Etherscan) instead. PythOracleAdapter, which has no nested proxy imports, is verified via the standard API. If V2 verification becomes available, re-run `forge verify-contract` with `--verifier etherscan` and the same constructor args.
+
+
 ## Production Development Plan
 
 | Phase | Goal | Key Tasks |
