@@ -151,6 +151,49 @@ forge script script/06_MultiPoolDeploy.s.sol \
 
 See `config/example-pools.json` for the expected JSON format.
 
+### Demoable User Flow Script
+
+`script/07_UserFlow.s.sol` mints two mock assets, wires them into the already deployed Sepolia contracts, and walks through the full PegGuard lifecycle:
+
+1. Deploy mock PEG tokens and approve Permit2, the Position Manager, and the Hookmate router.
+2. Initialize a brand-new v4 pool that uses the production `PegGuardHook`, configure fees/thresholds, and add concentrated liquidity.
+3. Optionally fund the reserve token, perform a swap routed through the hook (with oracle-driven fees), and trigger `PegGuardKeeper.evaluateAndUpdate`.
+4. Seed the `PegGuardJITManager` and run a `flashBurst` to demonstrate rapid JIT liquidity.
+
+This script is ideal for recording a terminal demo — every critical step emits `console2` logs and leaves an on-chain tx for judges to inspect.
+
+```bash
+# Configure optional size knobs in env(.example lists USERFLOW_* keys)
+cp env.example .env        # populate RPC_URL, PRIVATE_KEY, etc.
+
+# Dry-run locally (Anvil or fork)
+forge script script/07_UserFlow.s.sol
+
+# Broadcast on Sepolia for TxIDs + Etherscan links
+forge script script/07_UserFlow.s.sol \
+  --rpc-url $RPC_URL \
+  --private-key $PRIVATE_KEY \
+  --broadcast -vvv
+```
+
+Set `USERFLOW_*` env vars to control LP size, swap notional, reserve funding, and JIT flash parameters. Leave them at zero to skip optional steps (reserve/JIT funding).
+
+#### Demo Evidence (Sepolia)
+
+The latest broadcast of `script/07_UserFlow.s.sol` (captured in `broadcast/07_UserFlow.s.sol/11155111/run-latest.json`) produced the following verifiable transactions on Sepolia:
+
+| Flow Step | Tx Hash | Notes |
+| --- | --- | --- |
+| Deploy PegUSD mock token | `0x9e7bcc2772e70cf84ad031884616556ed5920595383605a8cd2a7f911c1215ee` | `MockERC20` constructor |
+| Deploy PegETH mock token | `0xd70c32bb3bcc90de9fdbb30c1ce8fdf14806e55598e1ff614859cfd7b9360ce1` | `MockERC20` constructor |
+| Initialize PegGuard pool (PositionManager) | `0x44dd52f66f71cf5b1b8b91bbacf33d911a32bd5af8225a73e7a7f99abdab8021` | `initializePool` call with PegGuard hook |
+| Configure hook (oracle + fee bands) | `0x1d43df30bdea21c8950d571de481a76fb87844e940adbdc4efc6d2485e448d13` | `PegGuardHook.configurePool` |
+| Add concentrated liquidity | `0x00e8a77daa4b99609e7200d16586180cdd4d30da48f3f78bc9f62094bd1c1b41` | `modifyLiquidities` with mint actions |
+| Swap through PegGuard hook | `0x7a1b27e005179bf178f44c962c90bfc8f5cb3520042a68c13bada33628506eac` | Hookmate router calling the pool |
+| Keeper evaluation | `0x4864c460dd87e82db50cee85f2fab35d788c29ec326d132ef30a284a7e864990` | `PegGuardKeeper.evaluateAndUpdate` |
+
+Use any block explorer (e.g., `https://sepolia.etherscan.io/tx/<hash>`) to inspect the logs and confirm hook/keeper events.
+
 ### Environment Variables
 
 Required environment variables for deployment:
