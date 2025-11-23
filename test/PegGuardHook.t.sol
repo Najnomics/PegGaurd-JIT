@@ -25,6 +25,39 @@ import {PegGuardLiquidityLib} from "../src/libraries/PegGuardLiquidityLib.sol";
 import {MockPyth} from "./mocks/MockPyth.sol";
 import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 
+contract MintExecutor {
+    using EasyPosm for IPositionManager;
+
+    struct MintParams {
+        PoolKey key;
+        int24 lower;
+        int24 upper;
+        uint256 liquidity;
+        uint256 amount0Max;
+        uint256 amount1Max;
+        address recipient;
+        uint256 deadline;
+        bytes hookData;
+    }
+
+    function mint(IPositionManager posm, MintParams calldata params)
+        external
+        returns (uint256 tokenId, BalanceDelta delta)
+    {
+        return posm.mint(
+            params.key,
+            params.lower,
+            params.upper,
+            params.liquidity,
+            params.amount0Max,
+            params.amount1Max,
+            params.recipient,
+            params.deadline,
+            params.hookData
+        );
+    }
+}
+
 contract PegGuardHookTest is BaseTest {
     using EasyPosm for IPositionManager;
     using PoolIdLibrary for PoolKey;
@@ -37,6 +70,7 @@ contract PegGuardHookTest is BaseTest {
     PoolId poolId;
 
     PegGuardHook hook;
+    MintExecutor mintExecutor;
     MockPyth mockPyth;
     PythOracleAdapter adapter;
 
@@ -44,8 +78,8 @@ contract PegGuardHookTest is BaseTest {
     int24 tickLower;
     int24 tickUpper;
 
-    bytes32 constant FEED_USDC = keccak256("USDC");
-    bytes32 constant FEED_USDT = keccak256("USDT");
+    bytes32 constant FEED_USDC = 0xd6aca1be9729c13d677335161321649cccae6a591554772516700f986f942eaa;
+    bytes32 constant FEED_USDT = 0x8b1a1d9c2b109e527c9134b25b1a1833b16b6594f92daa9f6d9b7a6024bce9d0;
 
     function setUp() public {
         deployArtifactsAndLabel();
@@ -65,6 +99,8 @@ contract PegGuardHookTest is BaseTest {
         hook = new PegGuardHook{salt: salt}(poolManager, address(adapter), Currency.unwrap(currency0), address(this));
         require(address(hook) == expected, "PegGuardHookTest: hook address mismatch");
 
+        mintExecutor = new MintExecutor();
+
         poolKey = PoolKey(currency0, currency1, LPFeeLibrary.DYNAMIC_FEE_FLAG, 60, IHooks(hook));
         poolId = poolKey.toId();
         poolManager.initialize(poolKey, Constants.SQRT_PRICE_1_1);
@@ -81,17 +117,10 @@ contract PegGuardHookTest is BaseTest {
             liquidityAmount
         );
 
-        (positionTokenId,) = positionManager.mint(
-            poolKey,
-            tickLower,
-            tickUpper,
-            liquidityAmount,
-            amount0Expected + 1,
-            amount1Expected + 1,
-            address(this),
-            block.timestamp,
-            Constants.ZERO_BYTES
+        MintExecutor.MintParams memory initParams = _buildMintParams(
+            poolKey, tickLower, tickUpper, liquidityAmount, amount0Expected + 1, amount1Expected + 1
         );
+        (positionTokenId,) = _mintPosition(initParams);
 
         PegGuardHook.ConfigurePoolParams memory params = PegGuardHook.ConfigurePoolParams({
             priceFeedId0: FEED_USDC,
@@ -179,35 +208,18 @@ contract PegGuardHookTest is BaseTest {
             liquidityAmount
         );
 
-        try this.mintWithHelper(
-            poolKey,
-            tickLower,
-            tickUpper,
-            liquidityAmount,
-            amount0Expected + 1,
-            amount1Expected + 1,
-            address(this),
-            block.timestamp,
-            Constants.ZERO_BYTES
-        ) {
-            fail("expected allowlist revert");
-        } catch (bytes memory err) {
-            _assertBeforeAddLiquidityRevert(err, PegGuardLiquidityLib.UnauthorizedLiquidityProvider.selector);
-        }
+        MintExecutor.MintParams memory denyParams =
+            _buildMintParams(poolKey, tickLower, tickUpper, liquidityAmount, amount0Expected + 1, amount1Expected + 1);
+        (bool denySuccess, bytes memory denyErr) = _delegateMint(denyParams);
+        assertFalse(denySuccess, "expected allowlist revert");
+        _assertBeforeAddLiquidityRevert(denyErr, PegGuardLiquidityLib.UnauthorizedLiquidityProvider.selector);
 
         hook.updateLiquidityAllowlist(poolKey, address(positionManager), true);
         assertTrue(hook.isAllowlisted(poolKey, address(positionManager)));
-        positionManager.mint(
-            poolKey,
-            tickLower,
-            tickUpper,
-            liquidityAmount,
-            amount0Expected + 1,
-            amount1Expected + 1,
-            address(this),
-            block.timestamp,
-            Constants.ZERO_BYTES
+        MintExecutor.MintParams memory allowParams = _buildMintParams(
+            poolKey, tickLower, tickUpper, liquidityAmount, amount0Expected + 1, amount1Expected + 1
         );
+        _mintPosition(allowParams);
     }
 
     function testTargetRangeEnforcedDuringJIT() public {
@@ -225,21 +237,11 @@ contract PegGuardHookTest is BaseTest {
             liquidityAmount
         );
 
-        try this.mintWithHelper(
-            poolKey,
-            tickLower,
-            tickUpper,
-            liquidityAmount,
-            amount0Expected + 1,
-            amount1Expected + 1,
-            address(this),
-            block.timestamp,
-            Constants.ZERO_BYTES
-        ) {
-            fail("expected target range revert");
-        } catch (bytes memory err) {
-            _assertBeforeAddLiquidityRevert(err, PegGuardHook.TargetRangeViolation.selector);
-        }
+        MintExecutor.MintParams memory jitParams =
+            _buildMintParams(poolKey, tickLower, tickUpper, liquidityAmount, amount0Expected + 1, amount1Expected + 1);
+        (bool jitSuccess, bytes memory jitErr) = _delegateMint(jitParams);
+        assertFalse(jitSuccess, "expected target range revert");
+        _assertBeforeAddLiquidityRevert(jitErr, PegGuardHook.TargetRangeViolation.selector);
 
         (uint256 allowedAmount0, uint256 allowedAmount1) = LiquidityAmounts.getAmountsForLiquidity(
             Constants.SQRT_PRICE_1_1,
@@ -248,19 +250,49 @@ contract PegGuardHookTest is BaseTest {
             liquidityAmount
         );
 
-        positionManager.mint(
-            poolKey,
-            targetLower,
-            targetUpper,
-            liquidityAmount,
-            allowedAmount0 + 1,
-            allowedAmount1 + 1,
-            address(this),
-            block.timestamp,
-            Constants.ZERO_BYTES
+        MintExecutor.MintParams memory allowedParams = _buildMintParams(
+            poolKey, targetLower, targetUpper, liquidityAmount, allowedAmount0 + 1, allowedAmount1 + 1
         );
+        _mintPosition(allowedParams);
 
         hook.setJITWindow(poolKey, false);
+    }
+
+    function _buildMintParams(
+        PoolKey memory key,
+        int24 lower,
+        int24 upper,
+        uint128 liquidity,
+        uint256 amount0Max,
+        uint256 amount1Max
+    ) internal view returns (MintExecutor.MintParams memory params) {
+        params.key = key;
+        params.lower = lower;
+        params.upper = upper;
+        params.liquidity = liquidity;
+        params.amount0Max = amount0Max;
+        params.amount1Max = amount1Max;
+        params.recipient = address(this);
+        params.deadline = block.timestamp;
+        params.hookData = Constants.ZERO_BYTES;
+    }
+
+    function _mintPosition(MintExecutor.MintParams memory params)
+        internal
+        returns (uint256 tokenId, BalanceDelta delta)
+    {
+        (bool success, bytes memory data) = _delegateMint(params);
+        require(success, "mint failed");
+        return abi.decode(data, (uint256, BalanceDelta));
+    }
+
+    function _delegateMint(MintExecutor.MintParams memory params)
+        internal
+        returns (bool success, bytes memory data)
+    {
+        return address(mintExecutor).delegatecall(
+            abi.encodeWithSelector(MintExecutor.mint.selector, positionManager, params)
+        );
     }
 
     function _assertBeforeAddLiquidityRevert(bytes memory err, bytes4 expectedInner) internal view {
@@ -301,17 +333,4 @@ contract PegGuardHookTest is BaseTest {
         mockPyth.setPrice(FEED_USDT, price1, confidence);
     }
 
-    function mintWithHelper(
-        PoolKey memory key,
-        int24 lower,
-        int24 upper,
-        uint256 liquidity,
-        uint256 amount0Max,
-        uint256 amount1Max,
-        address recipient,
-        uint256 deadline,
-        bytes memory hookData
-    ) external returns (uint256 tokenId, BalanceDelta delta) {
-        return positionManager.mint(key, lower, upper, liquidity, amount0Max, amount1Max, recipient, deadline, hookData);
-    }
 }
